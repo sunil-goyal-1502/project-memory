@@ -15,6 +15,7 @@ const path = require("path");
  */
 
 const THROTTLE_MS = 3 * 60 * 1000; // 3 minutes
+const MATCHED_TOOLS = new Set(["Bash", "WebFetch", "WebSearch", "Task"]);
 
 function findProjectRoot(startDir) {
   let dir = startDir;
@@ -65,6 +66,12 @@ function main() {
     input = JSON.parse(raw);
   } catch {
     // No input or invalid JSON
+  }
+
+  // Only fire for research-indicative tools
+  if (!MATCHED_TOOLS.has(input.tool_name)) {
+    process.stdout.write(JSON.stringify({}));
+    process.exit(0);
   }
 
   const cwd = input.cwd || process.cwd();
