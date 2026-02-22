@@ -9,12 +9,16 @@ const TOKENS_SAVED = {
   session_load_decision: 150,
   session_load_research: 300,
   research_search_hit: 1000,
+  memory_check_hit: 1000,
+  duplicate_save_avoided: 200,
 };
 
 const TIME_SAVED_SEC = {
   session_load_decision: 15,
   session_load_research: 45,
   research_search_hit: 120,
+  memory_check_hit: 120,
+  duplicate_save_avoided: 30,
 };
 
 // Approximate average $/1K tokens across models
@@ -44,6 +48,8 @@ function ensureStats(metadata) {
         session_load_decision: 0,
         session_load_research: 0,
         research_search_hit: 0,
+        memory_check_hit: 0,
+        duplicate_save_avoided: 0,
       },
     };
   }
@@ -52,7 +58,16 @@ function ensureStats(metadata) {
       session_load_decision: 0,
       session_load_research: 0,
       research_search_hit: 0,
+      memory_check_hit: 0,
+      duplicate_save_avoided: 0,
     };
+  }
+  // Ensure new event types exist in older metadata
+  if (!metadata.stats.eventCounts.memory_check_hit) {
+    metadata.stats.eventCounts.memory_check_hit = 0;
+  }
+  if (!metadata.stats.eventCounts.duplicate_save_avoided) {
+    metadata.stats.eventCounts.duplicate_save_avoided = 0;
   }
   return metadata;
 }
@@ -130,6 +145,37 @@ function formatCost(tokens) {
 }
 
 /**
+ * Format the standardized Memory Status block appended to every script output.
+ * @param {object} opts
+ * @param {string} opts.action - What happened ("Saved decision [arch]: ...", "Checked memory for ...")
+ * @param {string} opts.checked - What was checked ("decisions.jsonl (4 entries)", etc.)
+ * @param {string} opts.matches - Match summary ("0 duplicates", "2 matches found")
+ * @param {string} opts.saved - What was saved this action ("~150 tokens, ~15 sec per future session load")
+ * @param {string} opts.projectRoot - Project root for reading cumulative stats
+ * @returns {string} The formatted status block
+ */
+function formatMemoryStatus({ action, checked, matches, saved, projectRoot }) {
+  const lines = [];
+  lines.push("");
+  lines.push("--- Memory Status ---");
+  lines.push(`Action: ${action}`);
+  lines.push(`Checked: ${checked}`);
+  lines.push(`Matches: ${matches}`);
+  lines.push(`Saved: ${saved}`);
+
+  if (projectRoot) {
+    const stats = getStats(projectRoot);
+    if (stats.totalTokensSaved > 0) {
+      lines.push(
+        `Cumulative: ~${formatNumber(stats.totalTokensSaved)} tokens (~${formatCost(stats.totalTokensSaved)}), ~${formatDuration(stats.totalTimeSavedSeconds)} saved across ${formatNumber(stats.totalHits)} lookups`
+      );
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * Return a formatted one-liner showing session + cumulative savings.
  */
 function formatStatsLine(sessionTokensSaved, sessionTimeSaved, stats) {
@@ -163,4 +209,5 @@ module.exports = {
   formatDuration,
   formatCost,
   formatStatsLine,
+  formatMemoryStatus,
 };
