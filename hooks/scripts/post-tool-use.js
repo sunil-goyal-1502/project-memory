@@ -20,6 +20,7 @@ const path = require("path");
 const THROTTLE_MS = 3 * 60 * 1000; // 3 minutes
 const ESCALATION_THRESHOLD = 2; // escalate after this many ignored reminders
 const MATCHED_TOOLS = new Set(["Bash", "WebFetch", "WebSearch", "Task"]);
+const IMMEDIATE_SAVE_TOOLS = new Set(["Task", "WebSearch", "WebFetch"]);
 
 function findProjectRoot(startDir) {
   let dir = startDir;
@@ -138,6 +139,37 @@ function main() {
 
   // Read current escalation state
   const state = readState(projectRoot);
+  const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
+
+  // ── Immediate blocking for high-value research tools ──
+  // Task, WebSearch, WebFetch produce ephemeral knowledge that must be saved
+  // immediately. Skip the gentle escalation — block right away AND poison state
+  // so PreToolUse denies the next tool call unless Claude saves first.
+  if (IMMEDIATE_SAVE_TOOLS.has(input.tool_name)) {
+    // Check if a save happened since last state write — if so, reset
+    const currentSaveTs = getLastSaveTs(projectRoot);
+    if (currentSaveTs > state.lastSaveTs && state.lastSaveTs > 0) {
+      state.reminderCount = 0;
+    }
+    // Force escalation — set count above threshold so PreToolUse blocks next call
+    state.reminderCount = ESCALATION_THRESHOLD + 1;
+    state.ts = Date.now();
+    state.lastSaveTs = Math.max(state.lastSaveTs, currentSaveTs);
+    writeState(projectRoot, state);
+
+    const blockReason = `[project-memory] You just used ${input.tool_name} — this produces valuable knowledge that WILL BE LOST if not saved.
+SAVE NOW before doing anything else:
+- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"
+- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"
+Your next tool call will be DENIED until you save.`;
+
+    process.stdout.write(
+      JSON.stringify({ decision: "block", reason: blockReason })
+    );
+    process.exit(0);
+  }
+
+  // ── Gradual escalation for Bash and other tools ──
 
   // Throttle — max once every 3 minutes
   if (Date.now() - state.ts < THROTTLE_MS) {
@@ -157,9 +189,6 @@ function main() {
   state.ts = Date.now();
   state.lastSaveTs = Math.max(state.lastSaveTs, currentSaveTs);
   writeState(projectRoot, state);
-
-  // Build the reminder message
-  const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
 
   if (state.reminderCount <= ESCALATION_THRESHOLD) {
     // Gentle nudge via systemMessage

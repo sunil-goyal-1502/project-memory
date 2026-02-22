@@ -124,10 +124,30 @@ async function main() {
   let sessionTokensSaved = 0;
   let sessionTimeSaved = 0;
 
+  // Record savings events and compute session totals
+  if (decisions.length > 0) {
+    statsModule.recordEvent(projectRoot, "session_load_decision", decisions.length);
+    sessionTokensSaved += decisions.length * statsModule.TOKENS_SAVED.session_load_decision;
+    sessionTimeSaved += decisions.length * statsModule.TIME_SAVED_SEC.session_load_decision;
+  }
+  if (research.length > 0) {
+    statsModule.recordEvent(projectRoot, "session_load_research", research.length);
+    sessionTokensSaved += research.length * statsModule.TOKENS_SAVED.session_load_research;
+    sessionTimeSaved += research.length * statsModule.TIME_SAVED_SEC.session_load_research;
+  }
+
+  // ── 1. Stats banner (FIRST LINE) ──
+  const stats = statsModule.getStats(projectRoot);
+  const statsBanner = sessionTokensSaved > 0
+    ? `**[project-memory]** Loaded: ${decisions.length} decisions, ${research.length} research | ${statsModule.formatStatsLine(sessionTokensSaved, sessionTimeSaved, stats)}`
+    : `**[project-memory]** Loaded: ${decisions.length} decisions, ${research.length} research`;
+  messageParts.push(statsBanner);
+
+  // ── 2. Decision summary ──
   if (decisions.length > 0) {
     const summary = summarizeDecisions(decisions);
     messageParts.push(
-      `Project Memory: ${decisions.length} decisions loaded [${summary}].`
+      `\nProject Decisions [${summary}]:`
     );
 
     // Include the actual decisions as concise context
@@ -144,18 +164,15 @@ async function main() {
     messageParts.push(lines.join("\n"));
   } else {
     messageParts.push(
-      "Project Memory: initialized but no decisions recorded yet. Use /memory:save to capture decisions."
+      "\nProject Memory: initialized but no decisions recorded yet. Use /memory:save to capture decisions."
     );
   }
 
-  // Research summary
+  // ── 3. Research summary ──
   if (research.length > 0) {
     const topicIndex = summarizeResearch(research);
     messageParts.push(
       `\nResearch Memory: ${research.length} findings. Topics: ${topicIndex}`
-    );
-    messageParts.push(
-      "Check .ai-memory/research.jsonl before investigating APIs, libraries, errors, or patterns."
     );
 
     if (research.length > 100) {
@@ -165,42 +182,34 @@ async function main() {
     }
   }
 
-  // Record savings events and compute session totals
-  if (decisions.length > 0) {
-    statsModule.recordEvent(projectRoot, "session_load_decision", decisions.length);
-    sessionTokensSaved += decisions.length * statsModule.TOKENS_SAVED.session_load_decision;
-    sessionTimeSaved += decisions.length * statsModule.TIME_SAVED_SEC.session_load_decision;
-  }
-  if (research.length > 0) {
-    statsModule.recordEvent(projectRoot, "session_load_research", research.length);
-    sessionTokensSaved += research.length * statsModule.TOKENS_SAVED.session_load_research;
-    sessionTimeSaved += research.length * statsModule.TIME_SAVED_SEC.session_load_research;
-  }
-
-  // Append savings line
-  if (sessionTokensSaved > 0) {
-    const stats = statsModule.getStats(projectRoot);
-    messageParts.push(statsModule.formatStatsLine(sessionTokensSaved, sessionTimeSaved, stats));
-  }
-
-  // Check for pending transcript extraction — instruct Claude to auto-extract
-  const lastSessionPath = path.join(
-    projectRoot,
-    ".ai-memory",
-    ".last-session.txt"
+  // ── 4. CITE MEMORY instruction ──
+  messageParts.push(
+    `\n**CITE MEMORY** — When loaded decisions or research above are relevant to your current task, START your response with:
+> [project-memory] Using saved finding: "<topic>" — <1-line summary>
+This proves to the user that memory is working. Always check memory before investigating.`
   );
-  if (fs.existsSync(lastSessionPath)) {
-    const stat = fs.statSync(lastSessionPath);
-    if (stat.size > 0) {
-      messageParts.push(
-        "\n**AUTO-EXTRACT**: Previous session transcript is pending. Immediately run /project-memory:memory-extract followed by /project-memory:research-extract to capture decisions and research from the last session. Do this now before responding to the user's first message."
-      );
-    }
-  }
 
-  // Standing instructions for automatic saving during conversation
+  // ── 5. CHECK FIRST instruction ──
   const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
 
+  messageParts.push(
+    `\n**CHECK FIRST** — Before investigating ANY API, library, error, or technical pattern, run:
+\`\`\`bash
+node "${pluginRoot}/scripts/check-memory.js" "search keywords"
+\`\`\`
+If matches found, USE them and cite. Only investigate if no relevant matches.`
+  );
+
+  // ── 6. IMMEDIATE SAVE TRIGGERS ──
+  messageParts.push(
+    `\n**IMMEDIATE SAVE TRIGGERS** — Save immediately (do NOT delay) after:
+- ANY codebase exploration (Task/Explore agent, reading multiple files for research)
+- ANY web search or URL fetch (WebSearch, WebFetch)
+- When the user gives an instruction, constraint, or asks you to remember something
+- When you discover API behavior, error causes, library quirks, or workarounds`
+  );
+
+  // ── 7. Auto-save instructions ──
   messageParts.push(
     `\n**MANDATORY AUTO-SAVE** — You MUST do this throughout the ENTIRE session without being asked:
 
@@ -216,10 +225,23 @@ node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>" [st
 \`\`\`
 Examples: API behavior, library quirks, error root causes, config requirements, workarounds, performance findings.
 
-**Search first** — Before investigating any API/library/error, FIRST read \`.ai-memory/research.jsonl\` for existing findings.
-
 **If in doubt, SAVE IT.** Saving too much is far better than losing knowledge.`
   );
+
+  // ── 8. Auto-extract reminder (if pending) ──
+  const lastSessionPath = path.join(
+    projectRoot,
+    ".ai-memory",
+    ".last-session.txt"
+  );
+  if (fs.existsSync(lastSessionPath)) {
+    const stat = fs.statSync(lastSessionPath);
+    if (stat.size > 0) {
+      messageParts.push(
+        "\n**AUTO-EXTRACT**: Previous session transcript is pending. Immediately run /project-memory:memory-extract followed by /project-memory:research-extract to capture decisions and research from the last session. Do this now before responding to the user's first message."
+      );
+    }
+  }
 
   const output = { systemMessage: messageParts.join("\n") };
   process.stdout.write(JSON.stringify(output));

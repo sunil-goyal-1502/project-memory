@@ -300,6 +300,19 @@ function generateAutoSaveSection(pluginRoot) {
 
 **You MUST save decisions and research automatically as you work. Do NOT wait to be asked.**
 
+### IMMEDIATE save triggers (do NOT delay these):
+- After ANY codebase exploration (Task/Explore agent, reading multiple files for research)
+- After ANY web search or URL fetch
+- When the user gives an instruction, constraint, or asks you to remember something
+- When you discover API behavior, error causes, library quirks, or workarounds
+
+### Check memory FIRST — before any investigation:
+\`\`\`bash
+node "${scriptPath}/scripts/check-memory.js" "search keywords"
+\`\`\`
+If relevant info found, USE it and cite:
+> [project-memory] Using saved finding: "<topic>"
+
 ### Save decisions — run this whenever a project decision is made:
 \`\`\`bash
 node "${scriptPath}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"
@@ -312,8 +325,6 @@ Examples of decisions: tech stack choices, API design patterns, naming conventio
 node "${scriptPath}/scripts/save-research.js" "<topic>" "<comma,separated,tags>" "<finding>" [stable|versioned|volatile]
 \`\`\`
 Examples of research: API response formats, library quirks, error root causes, config requirements, performance characteristics, workarounds.
-
-### Search before investigating — read .ai-memory/research.jsonl FIRST before any web search, API investigation, or library exploration.
 
 **If in doubt, SAVE IT. Saving too much is better than losing knowledge.**
 ${CLAUDE_AUTOSAVE_MARKER_END}`;
