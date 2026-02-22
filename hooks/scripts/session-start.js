@@ -79,22 +79,31 @@ function summarizeDecisions(decisions) {
   return parts.join(", ");
 }
 
-function summarizeResearch(research) {
+/**
+ * Format research findings with truncated content so Claude can actually USE them.
+ * Returns a multi-line string with each finding's topic + truncated finding text.
+ * Cap at 30 most recent findings, 150 chars per finding.
+ */
+function formatResearchFindings(research) {
   if (research.length === 0) return "";
 
-  // Sort by timestamp descending (most recent first), cap at 50
+  // Sort by timestamp descending (most recent first), cap at 30
   const sorted = [...research].sort((a, b) =>
     (b.ts || "").localeCompare(a.ts || "")
   );
-  const capped = sorted.slice(0, 50);
+  const capped = sorted.slice(0, 30);
 
-  const topicParts = capped.map((r) => {
+  const lines = capped.map((r) => {
     const staleness = r.staleness || "stable";
-    const version = r.version_anchored ? `:${r.version_anchored}` : "";
-    return `${r.topic || "untitled"} [${staleness}${version}]`;
+    const badge = staleness === "stable" ? "" : ` [${staleness}]`;
+    const finding = r.finding || "";
+    const truncated = finding.length > 150
+      ? finding.substring(0, 150) + "..."
+      : finding;
+    return `- **${r.topic || "untitled"}**${badge}: ${truncated}`;
   });
 
-  return topicParts.join(", ");
+  return lines.join("\n");
 }
 
 async function main() {
@@ -168,12 +177,18 @@ async function main() {
     );
   }
 
-  // ── 3. Research summary ──
+  // ── 3. Research findings (with actual content so Claude can USE them) ──
   if (research.length > 0) {
-    const topicIndex = summarizeResearch(research);
+    const findingsList = formatResearchFindings(research);
     messageParts.push(
-      `\nResearch Memory: ${research.length} findings. Topics: ${topicIndex}`
+      `\nResearch Memory: ${research.length} findings loaded. **USE these instead of re-investigating:**\n${findingsList}`
     );
+
+    if (research.length > 30) {
+      messageParts.push(
+        `(Showing 30 most recent of ${research.length}. Run check-memory.js for full search.)`
+      );
+    }
 
     if (research.length > 100) {
       messageParts.push(
@@ -184,20 +199,24 @@ async function main() {
 
   // ── 4. CITE MEMORY instruction ──
   messageParts.push(
-    `\n**CITE MEMORY** — When loaded decisions or research above are relevant to your current task, START your response with:
-> [project-memory] Using saved finding: "<topic>" — <1-line summary>
-This proves to the user that memory is working. Always check memory before investigating.`
+    `\n**CITE MEMORY** — The decisions and research findings above are REAL knowledge from previous sessions. When they are relevant to your current task:
+1. START your response with: > [project-memory] Using saved finding: "<topic>" — <1-line summary>
+2. USE the finding content directly — do NOT re-explore or re-investigate what is already saved above.
+3. This proves to the user that memory is working and avoids wasting time on redundant research.`
   );
 
   // ── 5. CHECK FIRST instruction ──
   const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
 
   messageParts.push(
-    `\n**CHECK FIRST** — Before investigating ANY API, library, error, or technical pattern, run:
+    `\n**CHECK FIRST — DO NOT explore or investigate what you already know:**
+- Before launching ANY Task/Explore agent to explore code → check research findings above FIRST
+- Before doing ANY web search or URL fetch → check research findings above FIRST
+- Before investigating ANY API, library, error, or pattern → run:
 \`\`\`bash
 node "${pluginRoot}/scripts/check-memory.js" "search keywords"
 \`\`\`
-If matches found, USE them and cite. Only investigate if no relevant matches.`
+If the research above already covers the topic, USE it directly and cite it. Do NOT re-explore.`
   );
 
   // ── 6. IMMEDIATE SAVE TRIGGERS ──

@@ -269,20 +269,50 @@ ${decisionsSection || "_No decisions recorded yet._\n"}
 ${CLAUDE_MARKER_END}`;
 }
 
-function generateClaudeResearchSection(research) {
-  const researchIndex = formatResearchTopicIndex(research);
+/**
+ * Format research as a list with truncated findings — so Claude can USE the content
+ * directly after context clears (when SessionStart systemMessage is lost).
+ * Cap at 30 most recent, 150 chars per finding.
+ */
+function formatResearchFindingsList(research) {
+  if (research.length === 0) return "";
 
+  const sorted = [...research].sort((a, b) =>
+    (b.ts || "").localeCompare(a.ts || "")
+  );
+  const capped = sorted.slice(0, 30);
+
+  const lines = capped.map((r) => {
+    const staleness = r.staleness || "stable";
+    const badge = staleness === "stable" ? "" : ` [${staleness}]`;
+    const finding = r.finding || "";
+    const truncated = finding.length > 150
+      ? finding.substring(0, 150) + "..."
+      : finding;
+    return `- **${r.topic || "untitled"}**${badge}: ${truncated}`;
+  });
+
+  return lines.join("\n");
+}
+
+function generateClaudeResearchSection(research) {
   let content = `${CLAUDE_RESEARCH_MARKER_START}
 ## Research Memory
 <!-- Auto-managed by project-memory plugin. Do not edit between markers. -->
 
 `;
   if (research.length > 0) {
-    content += `${research.length} research findings indexed. Check \`.ai-memory/research.jsonl\` before investigating APIs, libraries, errors, or patterns.
+    const findingsList = formatResearchFindingsList(research);
+    content += `${research.length} research findings loaded. **USE these instead of re-investigating:**
 
-${researchIndex}
+${findingsList}
 
 `;
+    if (research.length > 30) {
+      content += `_(Showing 30 most recent of ${research.length}. Run check-memory.js for full search.)_
+
+`;
+    }
   } else {
     content += `_No research findings recorded yet._
 
@@ -306,11 +336,11 @@ function generateAutoSaveSection(pluginRoot) {
 - When the user gives an instruction, constraint, or asks you to remember something
 - When you discover API behavior, error causes, library quirks, or workarounds
 
-### Check memory FIRST — before any investigation:
+### Check memory FIRST — before exploring code, web searches, or any investigation:
 \`\`\`bash
 node "${scriptPath}/scripts/check-memory.js" "search keywords"
 \`\`\`
-If relevant info found, USE it and cite:
+If relevant info found, USE it directly — do NOT re-explore or re-investigate. Cite:
 > [project-memory] Using saved finding: "<topic>"
 
 ### Save decisions — run this whenever a project decision is made:
