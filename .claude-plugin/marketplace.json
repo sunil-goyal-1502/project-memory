@@ -1,0 +1,17 @@
+{
+  "name": "sungoyal-plugins",
+  "owner": {
+    "name": "sungoyal"
+  },
+  "metadata": {
+    "description": "Project memory plugin marketplace"
+  },
+  "plugins": [
+    {
+      "name": "project-memory",
+      "source": "./",
+      "description": "Automatic project decision and research capture with cross-tool context sync",
+      "version": "0.4.1"
+    }
+  ]
+}
