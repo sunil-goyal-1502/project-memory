@@ -83,7 +83,7 @@ for (const r of research) {
 }
 
 scoredResearch.sort((a, b) => b.score - a.score);
-const topResearch = scoredResearch.slice(0, 3);
+const topResearch = scoredResearch.slice(0, 5);
 
 // Score decision entries
 const decisionsPath = path.join(dir, ".ai-memory", "decisions.jsonl");
@@ -108,7 +108,7 @@ for (const d of decisions) {
 }
 
 scoredDecisions.sort((a, b) => b.score - a.score);
-const topDecisions = scoredDecisions.slice(0, 3);
+const topDecisions = scoredDecisions.slice(0, 5);
 
 // Display research matches
 if (topResearch.length > 0) {
@@ -120,8 +120,8 @@ if (topResearch.length > 0) {
     const date = r.ts ? r.ts.substring(0, 10) : "unknown";
     const confidence = r.confidence != null ? r.confidence : "?";
     const finding =
-      r.finding && r.finding.length > 120
-        ? r.finding.substring(0, 120) + "..."
+      r.finding && r.finding.length > 300
+        ? r.finding.substring(0, 300) + "..."
         : r.finding || "";
     console.log(
       `${badge} ${r.topic || "untitled"} (score: ${score})`

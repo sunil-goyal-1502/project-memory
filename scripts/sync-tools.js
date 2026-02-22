@@ -272,7 +272,7 @@ ${CLAUDE_MARKER_END}`;
 /**
  * Format research as a list with truncated findings — so Claude can USE the content
  * directly after context clears (when SessionStart systemMessage is lost).
- * Cap at 30 most recent, 150 chars per finding.
+ * Uses a total budget of ~12000 chars across all findings.
  */
 function formatResearchFindingsList(research) {
   if (research.length === 0) return "";
@@ -282,12 +282,16 @@ function formatResearchFindingsList(research) {
   );
   const capped = sorted.slice(0, 30);
 
+  // Calculate per-finding budget from total budget
+  const TOTAL_BUDGET = 12000;
+  const perFinding = Math.max(200, Math.floor(TOTAL_BUDGET / capped.length));
+
   const lines = capped.map((r) => {
     const staleness = r.staleness || "stable";
     const badge = staleness === "stable" ? "" : ` [${staleness}]`;
     const finding = r.finding || "";
-    const truncated = finding.length > 150
-      ? finding.substring(0, 150) + "..."
+    const truncated = finding.length > perFinding
+      ? finding.substring(0, perFinding) + "..."
       : finding;
     return `- **${r.topic || "untitled"}**${badge}: ${truncated}`;
   });
@@ -306,6 +310,8 @@ function generateClaudeResearchSection(research) {
     content += `${research.length} research findings loaded. **USE these instead of re-investigating:**
 
 ${findingsList}
+
+**For full details, read \`.ai-memory/research.jsonl\` BEFORE reading source files.** Reading 1 memory file replaces reading 20+ source files.
 
 `;
     if (research.length > 30) {

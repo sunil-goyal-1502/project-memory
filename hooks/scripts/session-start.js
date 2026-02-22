@@ -82,7 +82,8 @@ function summarizeDecisions(decisions) {
 /**
  * Format research findings with truncated content so Claude can actually USE them.
  * Returns a multi-line string with each finding's topic + truncated finding text.
- * Cap at 30 most recent findings, 150 chars per finding.
+ * Uses a total budget of ~12000 chars across all findings to stay within
+ * reasonable system message limits while maximizing content per finding.
  */
 function formatResearchFindings(research) {
   if (research.length === 0) return "";
@@ -93,12 +94,16 @@ function formatResearchFindings(research) {
   );
   const capped = sorted.slice(0, 30);
 
+  // Calculate per-finding budget from total budget
+  const TOTAL_BUDGET = 12000; // ~3000 tokens total for all findings
+  const perFinding = Math.max(200, Math.floor(TOTAL_BUDGET / capped.length));
+
   const lines = capped.map((r) => {
     const staleness = r.staleness || "stable";
     const badge = staleness === "stable" ? "" : ` [${staleness}]`;
     const finding = r.finding || "";
-    const truncated = finding.length > 150
-      ? finding.substring(0, 150) + "..."
+    const truncated = finding.length > perFinding
+      ? finding.substring(0, perFinding) + "..."
       : finding;
     return `- **${r.topic || "untitled"}**${badge}: ${truncated}`;
   });
@@ -184,6 +189,10 @@ async function main() {
       `\nResearch Memory: ${research.length} findings loaded. **USE these instead of re-investigating:**\n${findingsList}`
     );
 
+    messageParts.push(
+      `\n**READ FULL FINDINGS** — The summaries above are truncated. For full details, read \`.ai-memory/research.jsonl\` BEFORE reading source files. Reading 1 memory file replaces reading 20+ source files.`
+    );
+
     if (research.length > 30) {
       messageParts.push(
         `(Showing 30 most recent of ${research.length}. Run check-memory.js for full search.)`
@@ -210,13 +219,10 @@ async function main() {
 
   messageParts.push(
     `\n**CHECK FIRST — DO NOT explore or investigate what you already know:**
-- Before launching ANY Task/Explore agent to explore code → check research findings above FIRST
-- Before doing ANY web search or URL fetch → check research findings above FIRST
-- Before investigating ANY API, library, error, or pattern → run:
-\`\`\`bash
-node "${pluginRoot}/scripts/check-memory.js" "search keywords"
-\`\`\`
-If the research above already covers the topic, USE it directly and cite it. Do NOT re-explore.`
+1. Read the research summaries above — if a topic is covered, USE it. Do NOT re-read source files.
+2. If you need full details beyond the summaries, read \`.ai-memory/research.jsonl\` (1 file vs 20+ source files).
+3. For keyword search: \`node "${pluginRoot}/scripts/check-memory.js" "keywords"\`
+4. ONLY read source files or launch Explore agents for topics NOT covered by saved research.`
   );
 
   // ── 6. IMMEDIATE SAVE TRIGGERS ──
