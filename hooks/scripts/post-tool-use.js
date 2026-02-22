@@ -101,16 +101,14 @@ function main() {
   // Build the reminder
   const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
 
-  const reminder = `[project-memory] If you discovered any decisions or research findings, save them NOW before continuing:
+  const reminder = `[project-memory] You just used a research tool. If you discovered any decisions or research findings, save them NOW before continuing:
 - Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"
 - Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"
-- Check first: node "${pluginRoot}/scripts/check-memory.js" "keywords"`;
+- Check first: node "${pluginRoot}/scripts/check-memory.js" "keywords"
+Do NOT skip this. Save immediately, then continue your task.`;
 
   const output = {
-    hookSpecificOutput: {
-      hookEventName: "PostToolUse",
-      additionalContext: reminder,
-    },
+    systemMessage: reminder,
   };
 
   process.stdout.write(JSON.stringify(output));
