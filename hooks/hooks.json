@@ -14,7 +14,6 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|WebFetch|WebSearch|Task",
         "hooks": [
           {
             "type": "command",
