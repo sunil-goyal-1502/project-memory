@@ -18,7 +18,7 @@ const path = require("path");
  */
 
 const THROTTLE_MS = 3 * 60 * 1000; // 3 minutes
-const ESCALATION_THRESHOLD = 3; // block after this many ignored reminders
+const ESCALATION_THRESHOLD = 2; // escalate after this many ignored reminders
 const MATCHED_TOOLS = new Set(["Bash", "WebFetch", "WebSearch", "Task"]);
 
 function findProjectRoot(startDir) {
