@@ -57,6 +57,43 @@ function findProjectRoot(startDir) {
  * Session-start writes the real project root to ~/.ai-memory-sessions/<session_id>.
  * This function tries findProjectRoot first, then falls back to the session registry.
  */
+/**
+ * Windows fallback: when cwd is C:\Windows\System32 (or any system dir),
+ * scan $USERPROFILE and its immediate children for .ai-memory directories.
+ * Returns the most recently modified project root, or null.
+ */
+function scanHomeForProjects() {
+  const home = process.env.USERPROFILE || process.env.HOME;
+  if (!home) return null;
+
+  const candidates = [];
+  if (fs.existsSync(path.join(home, ".ai-memory"))) candidates.push(home);
+
+  try {
+    const entries = fs.readdirSync(home, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith(".")) {
+        const childPath = path.join(home, entry.name);
+        if (fs.existsSync(path.join(childPath, ".ai-memory"))) {
+          candidates.push(childPath);
+        }
+      }
+    }
+  } catch {}
+
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+
+  candidates.sort((a, b) => {
+    try {
+      const aStat = fs.statSync(path.join(a, ".ai-memory"));
+      const bStat = fs.statSync(path.join(b, ".ai-memory"));
+      return bStat.mtimeMs - aStat.mtimeMs;
+    } catch { return 0; }
+  });
+  return candidates[0];
+}
+
 function resolveProjectRoot(cwd, sessionId) {
   const root = findProjectRoot(cwd);
   if (root) return root;
@@ -75,7 +112,9 @@ function resolveProjectRoot(cwd, sessionId) {
       }
     } catch { /* not found */ }
   }
-  return null;
+
+  // Windows fallback: scan USERPROFILE children for .ai-memory
+  return scanHomeForProjects();
 }
 
 function isSaveCall(input) {

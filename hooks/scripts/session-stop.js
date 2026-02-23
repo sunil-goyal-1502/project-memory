@@ -38,32 +38,57 @@ async function main() {
   const transcriptPath = input.transcript_path;
   const sessionId = input.session_id;
 
-  // Clean up session registry entry
-  if (sessionId) {
+  // Read session registry BEFORE cleaning it up (need it for fallback)
+  let registeredRoot = null;
+  const sessFile = sessionId
+    ? path.join(process.env.USERPROFILE || process.env.HOME || "/tmp", ".ai-memory-sessions", sessionId)
+    : null;
+  if (sessFile) {
     try {
-      const sessFile = path.join(
-        process.env.USERPROFILE || process.env.HOME || "/tmp",
-        ".ai-memory-sessions",
-        sessionId
-      );
-      fs.unlinkSync(sessFile);
-    } catch { /* doesn't exist — fine */ }
+      registeredRoot = fs.readFileSync(sessFile, "utf-8").trim();
+    } catch { /* not found */ }
   }
 
-  // Try cwd first, then session registry fallback (Windows cwd bug)
+  // Clean up session registry entry
+  if (sessFile) {
+    try { fs.unlinkSync(sessFile); } catch { /* doesn't exist — fine */ }
+  }
+
+  // Try cwd first, then session registry fallback (Windows cwd bug),
+  // then scan USERPROFILE children as last resort
   let projectRoot = findProjectRoot(cwd);
-  if (!projectRoot && sessionId) {
-    try {
-      const sessFile = path.join(
-        process.env.USERPROFILE || process.env.HOME || "/tmp",
-        ".ai-memory-sessions",
-        sessionId
-      );
-      const savedRoot = fs.readFileSync(sessFile, "utf-8").trim();
-      if (savedRoot && fs.existsSync(path.join(savedRoot, ".ai-memory"))) {
-        projectRoot = savedRoot;
+  if (!projectRoot && registeredRoot && fs.existsSync(path.join(registeredRoot, ".ai-memory"))) {
+    projectRoot = registeredRoot;
+  }
+  if (!projectRoot) {
+    // Windows fallback: scan USERPROFILE children for .ai-memory
+    const home = process.env.USERPROFILE || process.env.HOME;
+    if (home) {
+      const candidates = [];
+      if (fs.existsSync(path.join(home, ".ai-memory"))) candidates.push(home);
+      try {
+        const entries = fs.readdirSync(home, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory() && !entry.name.startsWith(".")) {
+            const childPath = path.join(home, entry.name);
+            if (fs.existsSync(path.join(childPath, ".ai-memory"))) {
+              candidates.push(childPath);
+            }
+          }
+        }
+      } catch {}
+      if (candidates.length === 1) {
+        projectRoot = candidates[0];
+      } else if (candidates.length > 1) {
+        candidates.sort((a, b) => {
+          try {
+            return fs.statSync(path.join(b, ".ai-memory")).mtimeMs -
+                   fs.statSync(path.join(a, ".ai-memory")).mtimeMs;
+          } catch { return 0; }
+        });
+        projectRoot = candidates[0];
       }
-    } catch { /* not found */ }
+    }
   }
   if (!projectRoot) {
     // Not initialized - skip
