@@ -129,10 +129,41 @@ function isSaveCall(input) {
 }
 
 /**
- * Check if a Bash command is exploratory/research in nature.
- * Only these commands warrant a memory-check gate.
- * Operational commands (mkdir, git commit, npm install, etc.) pass through.
+ * Layered intent detection for Bash commands.
+ *
+ * Layer 1 (primary): Keyword scoring on tool_input.description — Claude's
+ *   human-readable intent (e.g. "Search for auth patterns" vs "Create dir").
+ *   If exploration keywords outscore operational keywords → exploratory.
+ *   If operational outscore exploration → operational. Ties fall through.
+ *
+ * Layer 2 (fallback): Regex on the command string for clearly exploratory
+ *   commands (grep, curl, git log, etc.). Ambiguous commands like find are
+ *   NOT matched here — they require the description layer to classify.
  */
+const EXPLORATION_KEYWORDS = [
+  /\bsearch/i, /\binvestigat/i, /\bexplor/i, /\bexamin/i,
+  /\binspect/i, /\bunderstand/i, /\banalyz/i, /\bresearch/i,
+  /\bdebug/i, /\btrac(e|ing)\b/i, /\blook\s*(for|at|into|up)\b/i,
+  /\bfind\s+(out|where|how|what|why)\b/i, /\bidentif/i,
+  /\bdetermin/i, /\bfigure\s+out/i, /\bbrows/i, /\bscan/i,
+  /\bcheck\s+(if|whether|what|how|where|content)/i,
+  /\bwhat\s+(is|are|does)/i, /\bhow\s+(does|do|is|to)/i,
+  /\bwhere\s+(is|are|does)/i, /\blist\s+(all|the|every|content)/i,
+  /\bshow\s+(the|all|me|current)/i, /\bread\b/i, /\bview/i,
+];
+
+const OPERATIONAL_KEYWORDS = [
+  /\bcreat/i, /\bbuild/i, /\brebuild/i, /\binstall/i, /\brun\b/i,
+  /\bstart/i, /\bdeploy/i, /\bpush/i, /\bcommit/i,
+  /\bcompil/i, /\btest/i, /\bserv/i, /\bclean/i,
+  /\bdelet/i, /\bmov/i, /\bcopy/i, /\brenam/i,
+  /\bset\s*up/i, /\bconfigur/i, /\binitializ/i, /\bgenerat/i,
+  /\bwrit/i, /\bmak/i, /\bupdat/i, /\bfix/i,
+  /\bapply/i, /\bexecut/i, /\blaunch/i, /\brestart/i,
+  /\bstop\b/i, /\bkill/i, /\bformat/i, /\blint/i,
+  /\bpropagate/i, /\bcopy.*to\b/i, /\bsync/i,
+];
+
 const EXPLORATION_PATTERNS = [
   /\bcurl\s/,          // web fetching for research
   /\bwget\s/,          // web fetching
@@ -143,9 +174,7 @@ const EXPLORATION_PATTERNS = [
   /\brg\s/,            // ripgrep search
   /\bag\s/,            // silver searcher
   /\back\s/,           // ack search
-  /\bfind\s+.*-name/,  // finding files by name
-  /\bfind\s+.*-type/,  // finding files by type
-  /\blocate\s/,        // finding files
+  /\blocate\s/,        // finding files via index
   /\bnpm\s+(info|search|view)\b/, // package research
   /\bpip\s+(show|search)\b/,     // python package research
 ];
@@ -153,7 +182,22 @@ const EXPLORATION_PATTERNS = [
 function isExploratoryBash(input) {
   if (!input || !input.tool_input) return false;
   const cmd = input.tool_input.command || "";
-  return EXPLORATION_PATTERNS.some((p) => p.test(cmd));
+  const desc = (input.tool_input.description || "");
+
+  // Layer 1: Description-based intent detection
+  if (desc.length > 5) {
+    const explorationScore = EXPLORATION_KEYWORDS.filter(p => p.test(desc)).length;
+    const operationalScore = OPERATIONAL_KEYWORDS.filter(p => p.test(desc)).length;
+
+    debugLog(null, `INTENT: desc="${desc.slice(0, 80)}" explore=${explorationScore} operational=${operationalScore}`);
+
+    if (explorationScore > operationalScore) return true;
+    if (operationalScore > explorationScore) return false;
+    // Tied or zero — fall through to command regex
+  }
+
+  // Layer 2: Command regex fallback (only clearly exploratory commands)
+  return EXPLORATION_PATTERNS.some(p => p.test(cmd));
 }
 
 /**
