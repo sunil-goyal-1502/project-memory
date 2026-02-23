@@ -14,13 +14,21 @@ const path = require("path");
  * Resets counter when Claude actually saves (detected via file mtime).
  * Throttled to max once every 3 minutes.
  * Skips self-calls (save-decision.js, save-research.js, check-memory.js).
+ *
+ * Task completion tracking:
+ *   - Tracks TaskCreate/TaskUpdate to detect when all planned tasks are done
+ *   - When all tasks complete, blocks until session-summary.js is run
+ *   - Also blocks after SUMMARY_CHECKPOINT_CALLS tool calls as periodic fallback
+ *
  * Always exits 0 (hook contract).
  */
 
 const THROTTLE_MS = 3 * 60 * 1000; // 3 minutes
 const ESCALATION_THRESHOLD = 2; // escalate after this many ignored reminders
+const SUMMARY_CHECKPOINT_CALLS = 20; // force summary after this many matched tool calls
 const MATCHED_TOOLS = new Set(["Bash", "WebFetch", "WebSearch", "Task"]);
 const IMMEDIATE_SAVE_TOOLS = new Set(["Task", "WebSearch", "WebFetch"]);
+const TASK_TOOLS = new Set(["TaskCreate", "TaskUpdate"]);
 
 // ANSI colors for visible memory messages
 const M = "\x1b[95m"; // bright magenta
@@ -83,8 +91,67 @@ function isSelfCall(input) {
   return (
     cmd.includes("save-decision") ||
     cmd.includes("save-research") ||
-    cmd.includes("check-memory")
+    cmd.includes("check-memory") ||
+    cmd.includes("session-summary")
   );
+}
+
+// ── Task completion tracking ──
+
+/**
+ * Read task tracker state from .ai-memory/.task-tracker.
+ * Tracks: created (count), completed (count), toolCallsSinceSummary (count).
+ */
+function readTaskTracker(projectRoot) {
+  const trackerPath = path.join(projectRoot, ".ai-memory", ".task-tracker");
+  const defaults = { created: 0, completed: 0, toolCallsSinceSummary: 0 };
+  try {
+    const raw = fs.readFileSync(trackerPath, "utf-8").trim();
+    if (!raw || !raw.startsWith("{")) return defaults;
+    const parsed = JSON.parse(raw);
+    return {
+      created: parsed.created || 0,
+      completed: parsed.completed || 0,
+      toolCallsSinceSummary: parsed.toolCallsSinceSummary || 0,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function writeTaskTracker(projectRoot, tracker) {
+  const trackerPath = path.join(projectRoot, ".ai-memory", ".task-tracker");
+  try {
+    fs.writeFileSync(trackerPath, JSON.stringify(tracker), "utf-8");
+  } catch { /* non-critical */ }
+}
+
+/**
+ * Build a green Insight-style banner for task completion.
+ */
+function buildTaskCompletionBanner(projectRoot, tracker, pluginRoot) {
+  const border = "\u2500".repeat(49);
+  const lines = [];
+  lines.push(`${G}${B}\u2605 All Tasks Complete \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500${R}`);
+  lines.push(`${G}  \u2713 ${tracker.completed}/${tracker.created} tasks completed${R}`);
+  lines.push(`${G}  Run the session summary NOW:${R}`);
+  lines.push(`${G}  node "${pluginRoot}/scripts/session-summary.js"${R}`);
+  lines.push(`${G}${B}${border}${R}`);
+  return lines.join("\n");
+}
+
+/**
+ * Build a green Insight-style banner for periodic summary checkpoint.
+ */
+function buildPeriodicCheckpointBanner(projectRoot, tracker, pluginRoot) {
+  const border = "\u2500".repeat(49);
+  const lines = [];
+  lines.push(`${G}${B}\u2605 Summary Checkpoint \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500${R}`);
+  lines.push(`${G}  ${tracker.toolCallsSinceSummary} tool calls since last summary${R}`);
+  lines.push(`${G}  Run the session summary NOW:${R}`);
+  lines.push(`${G}  node "${pluginRoot}/scripts/session-summary.js"${R}`);
+  lines.push(`${G}${B}${border}${R}`);
+  return lines.join("\n");
 }
 
 /**
@@ -217,6 +284,43 @@ function main() {
 
   debugLog(null, `CALLED tool=${input.tool_name || "NONE"} cwd=${input.cwd || "NONE"}`);
 
+  // ── Task completion tracking (fires for TaskCreate/TaskUpdate) ──
+  // This runs BEFORE the MATCHED_TOOLS filter since TaskCreate/TaskUpdate
+  // are not in MATCHED_TOOLS but we need to track them.
+  if (TASK_TOOLS.has(input.tool_name)) {
+    const taskCwd = input.cwd || process.cwd();
+    const taskRoot = resolveProjectRoot(taskCwd, input.session_id);
+    if (taskRoot) {
+      const tracker = readTaskTracker(taskRoot);
+      const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
+
+      if (input.tool_name === "TaskCreate") {
+        tracker.created += 1;
+        writeTaskTracker(taskRoot, tracker);
+      } else if (input.tool_name === "TaskUpdate") {
+        const status = (input.tool_input || {}).status;
+        if (status === "completed") {
+          tracker.completed += 1;
+          writeTaskTracker(taskRoot, tracker);
+
+          // Check if ALL tasks are now complete
+          if (tracker.completed >= tracker.created && tracker.created > 0) {
+            debugLog(taskRoot, `TASK-COMPLETE: ${tracker.completed}/${tracker.created} — blocking for session-summary`);
+            const banner = buildTaskCompletionBanner(taskRoot, tracker, pluginRoot);
+            process.stdout.write(
+              JSON.stringify({ decision: "block", reason: banner })
+            );
+            process.exit(0);
+          }
+        } else if (status === "deleted") {
+          tracker.created = Math.max(0, tracker.created - 1);
+          writeTaskTracker(taskRoot, tracker);
+        }
+      }
+    }
+    // TaskCreate/TaskUpdate are not in MATCHED_TOOLS — fall through to exit
+  }
+
   // Only fire for research-indicative tools
   if (!MATCHED_TOOLS.has(input.tool_name)) {
     process.stdout.write(JSON.stringify({}));
@@ -235,10 +339,28 @@ function main() {
     process.exit(0);
   }
 
-  // Skip self-calls (save-decision, save-research, check-memory)
+  // Skip self-calls (save-decision, save-research, check-memory, session-summary)
   if (input.tool_name === "Bash" && isSelfCall(input)) {
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
+  }
+
+  // ── Periodic summary checkpoint ──
+  // Increment tool call counter; block after SUMMARY_CHECKPOINT_CALLS
+  {
+    const tracker = readTaskTracker(projectRoot);
+    tracker.toolCallsSinceSummary += 1;
+    writeTaskTracker(projectRoot, tracker);
+
+    if (tracker.toolCallsSinceSummary >= SUMMARY_CHECKPOINT_CALLS) {
+      const plugRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
+      debugLog(projectRoot, `PERIODIC-CHECKPOINT: ${tracker.toolCallsSinceSummary} calls — blocking for session-summary`);
+      const banner = buildPeriodicCheckpointBanner(projectRoot, tracker, plugRoot);
+      process.stdout.write(
+        JSON.stringify({ decision: "block", reason: banner })
+      );
+      process.exit(0);
+    }
   }
 
   // Read current escalation state
