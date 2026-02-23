@@ -26,6 +26,8 @@ const IMMEDIATE_SAVE_TOOLS = new Set(["Task", "WebSearch", "WebFetch"]);
 const M = "\x1b[95m"; // bright magenta
 const B = "\x1b[1m";  // bold
 const R = "\x1b[0m";  // reset
+const G = "\x1b[92m"; // bright green
+const Y = "\x1b[93m"; // bright yellow
 
 // ── Debug logging ──
 function debugLog(projectRoot, msg) {
@@ -148,6 +150,62 @@ function getLastSaveTs(projectRoot) {
   return maxMtime;
 }
 
+/**
+ * Build a green/yellow Insight-style banner showing memory consultation status.
+ * Prepended to visible block messages so the user always sees evidence.
+ */
+function buildMemoryStatusBanner(projectRoot) {
+  const border = "\u2500".repeat(49);
+
+  // Check if memory was consulted this session
+  let memoryChecked = false;
+  try {
+    const ts = Number(
+      fs.readFileSync(path.join(projectRoot, ".ai-memory", ".last-memory-check"), "utf-8").trim()
+    );
+    memoryChecked = !isNaN(ts) && ts > 0;
+  } catch {}
+
+  // Count available entries
+  let researchCount = 0;
+  let decisionsCount = 0;
+  try {
+    const rc = fs.readFileSync(path.join(projectRoot, ".ai-memory", "research.jsonl"), "utf-8").trim();
+    if (rc) researchCount = rc.split("\n").filter((l) => l.trim()).length;
+  } catch {}
+  try {
+    const dc = fs.readFileSync(path.join(projectRoot, ".ai-memory", "decisions.jsonl"), "utf-8").trim();
+    if (dc) decisionsCount = dc.split("\n").filter((l) => l.trim()).length;
+  } catch {}
+
+  // Read cumulative stats
+  let cumulativeLine = "";
+  try {
+    const statsModule = require(path.join(__dirname, "..", "..", "scripts", "stats.js"));
+    const stats = statsModule.getStats(projectRoot);
+    if (stats.totalTokensSaved > 0) {
+      cumulativeLine = `  Cumulative: ~${statsModule.formatNumber(stats.totalTokensSaved)} tokens (~${statsModule.formatCost(stats.totalTokensSaved)}), ~${statsModule.formatDuration(stats.totalTimeSavedSeconds)} saved`;
+    }
+  } catch {}
+
+  const lines = [];
+  if (memoryChecked) {
+    lines.push(`${G}${B}\u2605 Memory Consulted \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500${R}`);
+    lines.push(`${G}  \u2713 Memory was checked (${researchCount} research, ${decisionsCount} decisions available)${R}`);
+    if (cumulativeLine) lines.push(`${G}${cumulativeLine}${R}`);
+    lines.push(`${G}${B}${border}${R}`);
+  } else {
+    lines.push(`${Y}${B}\u2605 Memory NOT Consulted \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500${R}`);
+    lines.push(`${Y}  \u25CB Memory was NOT checked before this search!${R}`);
+    if (researchCount > 0 || decisionsCount > 0) {
+      lines.push(`${Y}  ${researchCount} research + ${decisionsCount} decisions available \u2014 run check-memory first${R}`);
+    }
+    lines.push(`${Y}${B}${border}${R}`);
+  }
+
+  return lines.join("\n");
+}
+
 function main() {
   let input = {};
   try {
@@ -203,7 +261,10 @@ function main() {
     state.lastSaveTs = Math.max(state.lastSaveTs, currentSaveTs);
     writeState(projectRoot, state);
 
-    const blockReason = `${M}${B}[project-memory] You just used ${input.tool_name} — knowledge WILL BE LOST if not saved.${R}
+    const memBanner = buildMemoryStatusBanner(projectRoot);
+    const blockReason = `${memBanner}
+
+${M}${B}[project-memory] You just used ${input.tool_name} — knowledge WILL BE LOST if not saved.${R}
 ${M}SAVE NOW before doing anything else:${R}
 ${M}- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"${R}
 ${M}- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}
@@ -247,7 +308,10 @@ ${M}Do NOT skip this. Save immediately, then continue your task.${R}`;
     process.stdout.write(JSON.stringify({ systemMessage: reminder }));
   } else {
     // Escalated block — force Claude to acknowledge
-    const blockReason = `${M}${B}[project-memory] Researching ~${state.reminderCount * 3}+ min without saving!${R}
+    const memBanner2 = buildMemoryStatusBanner(projectRoot);
+    const blockReason = `${memBanner2}
+
+${M}${B}[project-memory] Researching ~${state.reminderCount * 3}+ min without saving!${R}
 ${M}STOP and save your discoveries before continuing:${R}
 ${M}- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"${R}
 ${M}- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}
