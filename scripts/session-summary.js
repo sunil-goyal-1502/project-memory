@@ -37,6 +37,41 @@ function findProjectRoot(startDir) {
 }
 
 /**
+ * Windows fallback: scan $USERPROFILE and its immediate children for .ai-memory.
+ * Returns the most recently modified project root, or null.
+ */
+function scanHomeForProjects() {
+  const home = process.env.USERPROFILE || process.env.HOME;
+  if (!home) return null;
+
+  const candidates = [];
+  if (fs.existsSync(path.join(home, ".ai-memory"))) candidates.push(home);
+
+  try {
+    const entries = fs.readdirSync(home, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith(".")) {
+        const childPath = path.join(home, entry.name);
+        if (fs.existsSync(path.join(childPath, ".ai-memory"))) {
+          candidates.push(childPath);
+        }
+      }
+    }
+  } catch {}
+
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+
+  candidates.sort((a, b) => {
+    try {
+      return fs.statSync(path.join(b, ".ai-memory")).mtimeMs -
+             fs.statSync(path.join(a, ".ai-memory")).mtimeMs;
+    } catch { return 0; }
+  });
+  return candidates[0];
+}
+
+/**
  * Parse JSONL file and return array of parsed objects.
  */
 function parseJsonl(filePath) {
@@ -93,7 +128,7 @@ function getLastSaveTs(memDir) {
 }
 
 function main() {
-  const projectRoot = findProjectRoot(process.cwd());
+  const projectRoot = findProjectRoot(process.cwd()) || scanHomeForProjects();
   if (!projectRoot) {
     console.log("No .ai-memory directory found.");
     process.exit(0);
