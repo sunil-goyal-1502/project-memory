@@ -131,6 +131,22 @@ async function main() {
     process.exit(0);
   }
 
+  // ── Register project root for this session ──
+  // On Windows, hook subprocess cwd can be C:\WINDOWS\system32 instead of
+  // the project directory. Session-start gets the correct cwd, so we persist
+  // it for PreToolUse/PostToolUse to look up by session_id.
+  const sessionId = input.session_id;
+  if (sessionId) {
+    const sessDir = path.join(
+      process.env.USERPROFILE || process.env.HOME || "/tmp",
+      ".ai-memory-sessions"
+    );
+    try {
+      fs.mkdirSync(sessDir, { recursive: true });
+      fs.writeFileSync(path.join(sessDir, sessionId), projectRoot, "utf-8");
+    } catch { /* non-critical */ }
+  }
+
   // Clear memory-check gate so exploration requires a fresh check each session
   const memCheckPath = path.join(projectRoot, ".ai-memory", ".last-memory-check");
   try { fs.unlinkSync(memCheckPath); } catch { /* doesn't exist — fine */ }

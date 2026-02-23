@@ -36,8 +36,35 @@ async function main() {
 
   const cwd = input.cwd || process.cwd();
   const transcriptPath = input.transcript_path;
+  const sessionId = input.session_id;
 
-  const projectRoot = findProjectRoot(cwd);
+  // Clean up session registry entry
+  if (sessionId) {
+    try {
+      const sessFile = path.join(
+        process.env.USERPROFILE || process.env.HOME || "/tmp",
+        ".ai-memory-sessions",
+        sessionId
+      );
+      fs.unlinkSync(sessFile);
+    } catch { /* doesn't exist — fine */ }
+  }
+
+  // Try cwd first, then session registry fallback (Windows cwd bug)
+  let projectRoot = findProjectRoot(cwd);
+  if (!projectRoot && sessionId) {
+    try {
+      const sessFile = path.join(
+        process.env.USERPROFILE || process.env.HOME || "/tmp",
+        ".ai-memory-sessions",
+        sessionId
+      );
+      const savedRoot = fs.readFileSync(sessFile, "utf-8").trim();
+      if (savedRoot && fs.existsSync(path.join(savedRoot, ".ai-memory"))) {
+        projectRoot = savedRoot;
+      }
+    } catch { /* not found */ }
+  }
   if (!projectRoot) {
     // Not initialized - skip
     process.stdout.write(JSON.stringify({}));

@@ -27,6 +27,17 @@ const M = "\x1b[95m"; // bright magenta
 const B = "\x1b[1m";  // bold
 const R = "\x1b[0m";  // reset
 
+// ── Debug logging ──
+function debugLog(projectRoot, msg) {
+  try {
+    const logPath = projectRoot
+      ? path.join(projectRoot, ".ai-memory", ".hook-debug.log")
+      : path.join(process.env.USERPROFILE || process.env.HOME || "/tmp", ".hook-debug.log");
+    const ts = new Date().toISOString();
+    fs.appendFileSync(logPath, `[${ts}] POST: ${msg}\n`, "utf-8");
+  } catch { /* non-critical */ }
+}
+
 function findProjectRoot(startDir) {
   let dir = startDir;
   while (true) {
@@ -37,6 +48,31 @@ function findProjectRoot(startDir) {
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/**
+ * On Windows, hook cwd can be C:\WINDOWS\system32 instead of the project dir.
+ * Session-start writes the real project root to ~/.ai-memory-sessions/<session_id>.
+ * This function tries findProjectRoot first, then falls back to the session registry.
+ */
+function resolveProjectRoot(cwd, sessionId) {
+  const root = findProjectRoot(cwd);
+  if (root) return root;
+
+  if (sessionId) {
+    try {
+      const sessFile = path.join(
+        process.env.USERPROFILE || process.env.HOME || "/tmp",
+        ".ai-memory-sessions",
+        sessionId
+      );
+      const savedRoot = fs.readFileSync(sessFile, "utf-8").trim();
+      if (savedRoot && fs.existsSync(path.join(savedRoot, ".ai-memory"))) {
+        return savedRoot;
+      }
+    } catch { /* not found */ }
+  }
+  return null;
 }
 
 function isSelfCall(input) {
@@ -121,6 +157,8 @@ function main() {
     // No input or invalid JSON
   }
 
+  debugLog(null, `CALLED tool=${input.tool_name || "NONE"} cwd=${input.cwd || "NONE"}`);
+
   // Only fire for research-indicative tools
   if (!MATCHED_TOOLS.has(input.tool_name)) {
     process.stdout.write(JSON.stringify({}));
@@ -128,10 +166,13 @@ function main() {
   }
 
   const cwd = input.cwd || process.cwd();
-  const projectRoot = findProjectRoot(cwd);
+  const projectRoot = resolveProjectRoot(cwd, input.session_id);
+
+  debugLog(projectRoot, `projectRoot=${projectRoot || "NULL"} cwd=${cwd} session=${input.session_id || "NONE"}`);
 
   // No .ai-memory directory — no-op
   if (!projectRoot) {
+    debugLog(null, `ALLOW: no projectRoot from cwd=${cwd}`);
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
   }
