@@ -123,8 +123,37 @@ function isSaveCall(input) {
   return (
     cmd.includes("save-decision") ||
     cmd.includes("save-research") ||
-    cmd.includes("check-memory")
+    cmd.includes("check-memory") ||
+    cmd.includes("session-summary")
   );
+}
+
+/**
+ * Check if a Bash command is exploratory/research in nature.
+ * Only these commands warrant a memory-check gate.
+ * Operational commands (mkdir, git commit, npm install, etc.) pass through.
+ */
+const EXPLORATION_PATTERNS = [
+  /\bcurl\s/,          // web fetching for research
+  /\bwget\s/,          // web fetching
+  /\bgit\s+log\b/,     // investigating commit history
+  /\bgit\s+show\b/,    // inspecting commits/objects
+  /\bgit\s+blame\b/,   // investigating code authorship
+  /\bgrep\s/,          // searching file contents
+  /\brg\s/,            // ripgrep search
+  /\bag\s/,            // silver searcher
+  /\back\s/,           // ack search
+  /\bfind\s+.*-name/,  // finding files by name
+  /\bfind\s+.*-type/,  // finding files by type
+  /\blocate\s/,        // finding files
+  /\bnpm\s+(info|search|view)\b/, // package research
+  /\bpip\s+(show|search)\b/,     // python package research
+];
+
+function isExploratoryBash(input) {
+  if (!input || !input.tool_input) return false;
+  const cmd = input.tool_input.command || "";
+  return EXPLORATION_PATTERNS.some((p) => p.test(cmd));
 }
 
 /**
@@ -264,11 +293,14 @@ ${M}If memory covers what you need, USE it directly. Only explore if no matches 
     }
   }
 
-  // ── GATE 2: ALL research tools require memory check first ──
-  // Blocks Bash, WebSearch, WebFetch, and Task until check-memory.js has been run.
-  // Self-calls (save-*/check-memory) are already exempted above.
-  if (hasResearch(projectRoot)) {
-    debugLog(projectRoot, `GATE2: ${input.tool_name} memChecked=${wasMemoryChecked(projectRoot)}`);
+  // ── GATE 2: Research tools require memory check first ──
+  // Blocks WebSearch, WebFetch, and Task until check-memory.js has been run.
+  // Bash is only blocked when the command is exploratory (curl, grep, git log, etc.)
+  // Operational Bash (mkdir, git commit, npm install, etc.) always passes through.
+  // Self-calls (save-*/check-memory/session-summary) are already exempted above.
+  const isExploratory = input.tool_name !== "Bash" || isExploratoryBash(input);
+  if (isExploratory && hasResearch(projectRoot)) {
+    debugLog(projectRoot, `GATE2: ${input.tool_name} memChecked=${wasMemoryChecked(projectRoot)} exploratory=${isExploratory}`);
     if (!wasMemoryChecked(projectRoot)) {
       const reason = `${M}${B}[project-memory] BLOCKED: You MUST check memory before proceeding.${R}
 ${M}Research findings from previous sessions may already have what you need.${R}
@@ -288,9 +320,18 @@ ${M}If memory covers what you need, USE it directly. Only proceed if no matches 
       );
       process.exit(0);
     }
+  } else if (input.tool_name === "Bash" && !isExploratory) {
+    debugLog(projectRoot, `ALLOW: GATE2 — Bash pass-through (non-exploratory)`);
   }
 
   // ── GATE 3: Escalation-based denial (save reminders exceeded) ──
+  // Non-exploratory Bash is exempt from escalation blocking too.
+  if (!isExploratory) {
+    debugLog(projectRoot, `ALLOW: GATE3 — Bash pass-through (non-exploratory)`);
+    process.stdout.write(JSON.stringify({}));
+    process.exit(0);
+  }
+
   const state = readState(projectRoot);
 
   // Not escalated yet — allow
