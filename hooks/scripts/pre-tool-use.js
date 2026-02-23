@@ -21,6 +21,17 @@ const path = require("path");
 
 const ESCALATION_THRESHOLD = 2; // deny after this many ignored reminders
 const MATCHED_TOOLS = new Set(["Bash", "WebFetch", "WebSearch", "Task"]);
+
+// ── Debug logging ──
+function debugLog(projectRoot, msg) {
+  try {
+    const logPath = projectRoot
+      ? path.join(projectRoot, ".ai-memory", ".hook-debug.log")
+      : path.join(process.env.USERPROFILE || process.env.HOME || "/tmp", ".hook-debug.log");
+    const ts = new Date().toISOString();
+    fs.appendFileSync(logPath, `[${ts}] PRE: ${msg}\n`, "utf-8");
+  } catch { /* non-critical */ }
+}
 const EXPLORATION_SUBAGENTS = new Set(["Explore", "Plan", "general-purpose", "feature-dev:code-explorer", "feature-dev:code-architect"]);
 const MEMORY_CHECK_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -39,6 +50,32 @@ function findProjectRoot(startDir) {
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/**
+ * On Windows, hook cwd can be C:\WINDOWS\system32 instead of the project dir.
+ * Session-start writes the real project root to ~/.ai-memory-sessions/<session_id>.
+ * This function tries findProjectRoot first, then falls back to the session registry.
+ */
+function resolveProjectRoot(cwd, sessionId) {
+  const root = findProjectRoot(cwd);
+  if (root) return root;
+
+  // Fallback: look up session registry written by session-start
+  if (sessionId) {
+    try {
+      const sessFile = path.join(
+        process.env.USERPROFILE || process.env.HOME || "/tmp",
+        ".ai-memory-sessions",
+        sessionId
+      );
+      const savedRoot = fs.readFileSync(sessFile, "utf-8").trim();
+      if (savedRoot && fs.existsSync(path.join(savedRoot, ".ai-memory"))) {
+        return savedRoot;
+      }
+    } catch { /* not found */ }
+  }
+  return null;
 }
 
 function isSaveCall(input) {
@@ -118,29 +155,37 @@ function getLastSaveTs(projectRoot) {
 
 function main() {
   let input = {};
+  let parseError = null;
   try {
     const raw = fs.readFileSync(0, "utf-8");
     input = JSON.parse(raw);
-  } catch {
-    // No input — allow by default
+  } catch (e) {
+    parseError = e.message;
   }
+
+  debugLog(null, `CALLED tool=${input.tool_name || "NONE"} subagent=${(input.tool_input || {}).subagent_type || "NONE"} cwd=${input.cwd || "NONE"} parseError=${parseError || "NONE"}`);
 
   // Only gate research-indicative tools
   if (!MATCHED_TOOLS.has(input.tool_name)) {
+    debugLog(null, `ALLOW: tool ${input.tool_name} not in MATCHED_TOOLS`);
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
   }
 
   // Always allow save/check-memory commands through (prevent deadlock)
   if (input.tool_name === "Bash" && isSaveCall(input)) {
+    debugLog(null, `ALLOW: save/check-memory call`);
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
   }
 
   const cwd = input.cwd || process.cwd();
-  const projectRoot = findProjectRoot(cwd);
+  const projectRoot = resolveProjectRoot(cwd, input.session_id);
+
+  debugLog(projectRoot, `projectRoot=${projectRoot || "NULL"} cwd=${cwd} session=${input.session_id || "NONE"}`);
 
   if (!projectRoot) {
+    debugLog(null, `ALLOW: no projectRoot found from cwd=${cwd}`);
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
   }
@@ -153,13 +198,17 @@ function main() {
   // re-investigating things already researched in previous sessions.
   if (input.tool_name === "Task") {
     const subagentType = (input.tool_input || {}).subagent_type || "";
-    if (EXPLORATION_SUBAGENTS.has(subagentType) && hasResearch(projectRoot)) {
-      if (!wasMemoryChecked(projectRoot)) {
+    const researchExists = hasResearch(projectRoot);
+    const memChecked = wasMemoryChecked(projectRoot);
+    debugLog(projectRoot, `GATE1: Task subagent=${subagentType} inSet=${EXPLORATION_SUBAGENTS.has(subagentType)} research=${researchExists} memChecked=${memChecked}`);
+    if (EXPLORATION_SUBAGENTS.has(subagentType) && researchExists) {
+      if (!memChecked) {
         const reason = `${M}${B}[project-memory] BLOCKED: You MUST check memory before exploring.${R}
 ${M}Research findings exist from previous sessions. Run check-memory FIRST:${R}
 ${M}  node "${pluginRoot}/scripts/check-memory.js" "relevant keywords"${R}
 ${M}If memory covers what you need, USE it directly. Only explore if no matches found.${R}`;
 
+        debugLog(projectRoot, `DENY: GATE1 — Task/${subagentType} blocked, memory not checked`);
         process.stdout.write(
           JSON.stringify({
             hookSpecificOutput: {
@@ -170,12 +219,15 @@ ${M}If memory covers what you need, USE it directly. Only explore if no matches 
           })
         );
         process.exit(0);
+      } else {
+        debugLog(projectRoot, `ALLOW: GATE1 — Task/${subagentType} allowed, memory was checked`);
       }
     }
   }
 
   // ── GATE 2: WebSearch/WebFetch also require memory check ──
   if ((input.tool_name === "WebSearch" || input.tool_name === "WebFetch") && hasResearch(projectRoot)) {
+    debugLog(projectRoot, `GATE2: ${input.tool_name} memChecked=${wasMemoryChecked(projectRoot)}`);
     if (!wasMemoryChecked(projectRoot)) {
       const reason = `${M}${B}[project-memory] BLOCKED: Check memory before web searching.${R}
 ${M}Research findings may already have what you need. Run check-memory FIRST:${R}
