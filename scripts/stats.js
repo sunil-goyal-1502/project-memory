@@ -24,6 +24,16 @@ const TIME_SAVED_SEC = {
 // Approximate average $/1K tokens across models
 const COST_PER_1K_TOKENS = 0.012;
 
+// ANSI color codes (consistent with hooks/scripts/pre-tool-use.js)
+const C = {
+  magenta: "\x1b[95m",  // bright magenta — "checking/consulting"
+  green: "\x1b[92m",    // bright green — "found/saved/savings"
+  yellow: "\x1b[93m",   // bright yellow — "no matches"
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  reset: "\x1b[0m",
+};
+
 function getMetadataPath(projectRoot) {
   return path.join(projectRoot, ".ai-memory", "metadata.json");
 }
@@ -176,6 +186,64 @@ function formatMemoryStatus({ action, checked, matches, saved, projectRoot }) {
 }
 
 /**
+ * Color-aware Insight-style savings box for check-memory terminal output.
+ * Matches the ★ Insight format: top border with title, content, bottom border.
+ * All in green ANSI for high visibility.
+ */
+function formatMemoryStatusColored({ action, checked, matches, saved, projectRoot }) {
+  const G = `${C.green}`;
+  const GB = `${C.green}${C.bold}`;
+  const R = C.reset;
+  const border = "\u2500".repeat(49);
+
+  const lines = [];
+  lines.push("");
+  lines.push(`${GB}\u2605 Memory Savings \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500${R}`);
+  lines.push(`${G}  This check: ${saved}${R}`);
+
+  if (projectRoot) {
+    const stats = getStats(projectRoot);
+    if (stats.totalTokensSaved > 0) {
+      lines.push(
+        `${G}  Cumulative: ~${formatNumber(stats.totalTokensSaved)} tokens (~${formatCost(stats.totalTokensSaved)}), ~${formatDuration(stats.totalTimeSavedSeconds)} saved across ${formatNumber(stats.totalHits)} lookups${R}`
+      );
+    }
+  }
+
+  lines.push(`${GB}${border}${R}`);
+  return lines.join("\n");
+}
+
+/**
+ * Reusable Insight-style savings box for save-research / save-decision.
+ * Shows per-action estimate + cumulative stats in green.
+ * @param {string} thisSave - e.g. "~1K tokens, ~2 min saved per future lookup"
+ * @param {string} projectRoot - project root for reading cumulative stats
+ */
+function formatSavingsInsight(thisSave, projectRoot) {
+  const G = `${C.green}`;
+  const GB = `${C.green}${C.bold}`;
+  const R = C.reset;
+  const border = "\u2500".repeat(49);
+
+  const lines = [];
+  lines.push(`${GB}\u2605 Memory Savings \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500${R}`);
+  lines.push(`${G}  This save: ${thisSave}${R}`);
+
+  if (projectRoot) {
+    const stats = getStats(projectRoot);
+    if (stats.totalTokensSaved > 0) {
+      lines.push(
+        `${G}  Cumulative: ~${formatNumber(stats.totalTokensSaved)} tokens (~${formatCost(stats.totalTokensSaved)}), ~${formatDuration(stats.totalTimeSavedSeconds)} saved across ${formatNumber(stats.totalHits)} lookups${R}`
+      );
+    }
+  }
+
+  lines.push(`${GB}${border}${R}`);
+  return lines.join("\n");
+}
+
+/**
  * Return a formatted one-liner showing session + cumulative savings.
  */
 function formatStatsLine(sessionTokensSaved, sessionTimeSaved, stats) {
@@ -200,6 +268,7 @@ function formatStatsLine(sessionTokensSaved, sessionTimeSaved, stats) {
 }
 
 module.exports = {
+  C,
   TOKENS_SAVED,
   TIME_SAVED_SEC,
   COST_PER_1K_TOKENS,
@@ -210,4 +279,6 @@ module.exports = {
   formatCost,
   formatStatsLine,
   formatMemoryStatus,
+  formatMemoryStatusColored,
+  formatSavingsInsight,
 };

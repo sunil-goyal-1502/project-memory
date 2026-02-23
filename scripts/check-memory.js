@@ -33,6 +33,7 @@ while (dir) {
 }
 
 const statsModule = require(path.join(__dirname, "stats.js"));
+const { C } = statsModule;
 
 function readJsonl(filePath) {
   if (!fs.existsSync(filePath)) return [];
@@ -110,9 +111,14 @@ for (const d of decisions) {
 scoredDecisions.sort((a, b) => b.score - a.score);
 const topDecisions = scoredDecisions.slice(0, 10);
 
+// ── Magenta preamble header ──
+console.log(`${C.magenta}${C.bold}[project-memory] Searching memory...${C.reset}`);
+console.log(`${C.magenta}Query: "${query}"  |  Checking research.jsonl (${research.length} entries), decisions.jsonl (${decisions.length} entries)${C.reset}`);
+console.log("");
+
 // Display research matches
 if (topResearch.length > 0) {
-  console.log(`=== Research Matches (${topResearch.length}) ===`);
+  console.log(`${C.green}${C.bold}=== Research Matches (${topResearch.length}) ===${C.reset}`);
   console.log("");
   for (const { entry: r, score } of topResearch) {
     const badge = stalenessBadge(r);
@@ -121,7 +127,7 @@ if (topResearch.length > 0) {
     const confidence = r.confidence != null ? r.confidence : "?";
     const finding = r.finding || "";
     console.log(
-      `${badge} ${r.topic || "untitled"} (score: ${score})`
+      `${C.green}\u2713 ${badge} ${r.topic || "untitled"} (score: ${score})${C.reset}`
     );
     console.log(
       `  Tags: ${tags}  |  Confidence: ${confidence}  |  Date: ${date}`
@@ -130,27 +136,25 @@ if (topResearch.length > 0) {
     console.log("");
   }
 } else {
-  console.log("=== Research Matches (0) ===");
-  console.log("No matching research found.");
+  console.log(`${C.yellow}\u25CB No matching research found.${C.reset}`);
   console.log("");
 }
 
 // Display decision matches
 if (topDecisions.length > 0) {
-  console.log(`=== Decision Matches (${topDecisions.length}) ===`);
+  console.log(`${C.green}${C.bold}=== Decision Matches (${topDecisions.length}) ===${C.reset}`);
   console.log("");
   for (const { entry: d, score } of topDecisions) {
     const rationale = d.rationale || "";
     const date = d.ts ? d.ts.substring(0, 10) : "unknown";
     console.log(
-      `[${d.category || "other"}] ${d.decision} (score: ${score})`
+      `${C.green}\u2713 [${d.category || "other"}] ${d.decision} (score: ${score})${C.reset}`
     );
     console.log(`  Rationale: ${rationale}  |  Date: ${date}`);
     console.log("");
   }
 } else {
-  console.log("=== Decision Matches (0) ===");
-  console.log("No matching decisions found.");
+  console.log(`${C.yellow}\u25CB No matching decisions found.${C.reset}`);
   console.log("");
 }
 
@@ -184,7 +188,7 @@ const matchDesc =
     : "0 matches";
 
 console.log(
-  statsModule.formatMemoryStatus({
+  statsModule.formatMemoryStatusColored({
     action: `Checked memory for "${query}"`,
     checked: checkedParts.join(", "),
     matches: matchDesc,
