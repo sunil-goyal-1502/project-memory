@@ -261,7 +261,11 @@ function main() {
     state.lastSaveTs = Math.max(state.lastSaveTs, currentSaveTs);
     writeState(projectRoot, state);
 
+    // Build banner BEFORE clearing gate (so it shows current consultation status)
     const memBanner = buildMemoryStatusBanner(projectRoot);
+
+    // Clear memory-check gate so the NEXT search requires a fresh check-memory
+    try { fs.unlinkSync(path.join(projectRoot, ".ai-memory", ".last-memory-check")); } catch {}
     const blockReason = `${memBanner}
 
 ${M}${B}[project-memory] You just used ${input.tool_name} — knowledge WILL BE LOST if not saved.${R}
