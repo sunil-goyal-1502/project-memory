@@ -264,15 +264,19 @@ ${M}If memory covers what you need, USE it directly. Only explore if no matches 
     }
   }
 
-  // ── GATE 2: WebSearch/WebFetch also require memory check ──
-  if ((input.tool_name === "WebSearch" || input.tool_name === "WebFetch") && hasResearch(projectRoot)) {
+  // ── GATE 2: ALL research tools require memory check first ──
+  // Blocks Bash, WebSearch, WebFetch, and Task until check-memory.js has been run.
+  // Self-calls (save-*/check-memory) are already exempted above.
+  if (hasResearch(projectRoot)) {
     debugLog(projectRoot, `GATE2: ${input.tool_name} memChecked=${wasMemoryChecked(projectRoot)}`);
     if (!wasMemoryChecked(projectRoot)) {
-      const reason = `${M}${B}[project-memory] BLOCKED: Check memory before web searching.${R}
-${M}Research findings may already have what you need. Run check-memory FIRST:${R}
-${M}  node "${pluginRoot}/scripts/check-memory.js" "relevant keywords"${R}
-${M}Only search the web if no relevant matches found in memory.${R}`;
+      const reason = `${M}${B}[project-memory] BLOCKED: You MUST check memory before proceeding.${R}
+${M}Research findings from previous sessions may already have what you need.${R}
+${M}Run check-memory FIRST:${R}
+${M}  node "${pluginRoot}/scripts/check-memory.js" "relevant keywords for your current task"${R}
+${M}If memory covers what you need, USE it directly. Only proceed if no matches found.${R}`;
 
+      debugLog(projectRoot, `DENY: GATE2 — ${input.tool_name} blocked, memory not checked`);
       process.stdout.write(
         JSON.stringify({
           hookSpecificOutput: {

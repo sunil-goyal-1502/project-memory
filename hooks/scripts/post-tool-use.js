@@ -259,6 +259,7 @@ function getLastSaveTs(projectRoot) {
 /**
  * Build a green/yellow Insight-style banner showing memory consultation status.
  * Prepended to visible block messages so the user always sees evidence.
+ * Returns { text, memoryChecked } so callers can add check-memory instructions.
  */
 function buildMemoryStatusBanner(projectRoot) {
   const border = "\u2500".repeat(49);
@@ -309,7 +310,7 @@ function buildMemoryStatusBanner(projectRoot) {
     lines.push(`${Y}${B}${border}${R}`);
   }
 
-  return lines.join("\n");
+  return { text: lines.join("\n"), memoryChecked };
 }
 
 function main() {
@@ -423,13 +424,19 @@ function main() {
     writeState(projectRoot, state);
 
     // Build banner BEFORE clearing gate (so it shows current consultation status)
-    const memBanner = buildMemoryStatusBanner(projectRoot);
+    const { text: memBanner, memoryChecked } = buildMemoryStatusBanner(projectRoot);
 
     // Clear memory-check gate so the NEXT search requires a fresh check-memory
     try { fs.unlinkSync(path.join(projectRoot, ".ai-memory", ".last-memory-check")); } catch {}
+
+    const checkMemoryLine = memoryChecked ? "" : `
+${M}${B}STEP 1: Check memory FIRST — your answer may already be saved:${R}
+${M}  node "${pluginRoot}/scripts/check-memory.js" "relevant keywords for your current task"${R}
+${M}${B}STEP 2: Save any NEW discoveries:${R}`;
+
     const blockReason = `${memBanner}
 
-${M}${B}[project-memory] You just used ${input.tool_name} — knowledge WILL BE LOST if not saved.${R}
+${M}${B}[project-memory] You just used ${input.tool_name} — knowledge WILL BE LOST if not saved.${R}${checkMemoryLine}
 ${M}SAVE NOW before doing anything else:${R}
 ${M}- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"${R}
 ${M}- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}
@@ -473,10 +480,16 @@ ${M}Do NOT skip this. Save immediately, then continue your task.${R}`;
     process.stdout.write(JSON.stringify({ systemMessage: reminder }));
   } else {
     // Escalated block — force Claude to acknowledge
-    const memBanner2 = buildMemoryStatusBanner(projectRoot);
+    const { text: memBanner2, memoryChecked: memChecked2 } = buildMemoryStatusBanner(projectRoot);
+
+    const checkMemLine2 = memChecked2 ? "" : `
+${M}${B}STEP 1: Check memory FIRST — your answer may already be saved:${R}
+${M}  node "${pluginRoot}/scripts/check-memory.js" "relevant keywords for your current task"${R}
+${M}${B}STEP 2: Save any NEW discoveries:${R}`;
+
     const blockReason = `${memBanner2}
 
-${M}${B}[project-memory] Researching ~${state.reminderCount * 3}+ min without saving!${R}
+${M}${B}[project-memory] Researching ~${state.reminderCount * 3}+ min without saving!${R}${checkMemLine2}
 ${M}STOP and save your discoveries before continuing:${R}
 ${M}- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"${R}
 ${M}- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}
