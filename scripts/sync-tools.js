@@ -373,6 +373,15 @@ node "${scriptPath}/scripts/save-research.js" "<topic>" "<comma,separated,tags>"
 Examples of research: API response formats, library quirks, error root causes, config requirements, performance characteristics, workarounds.
 
 **If in doubt, SAVE IT. Saving too much is better than losing knowledge.**
+
+### MANDATORY: End-of-Session Summary
+Before ending ANY session, you MUST run the session summary as your FINAL action:
+\`\`\`bash
+node "${scriptPath}/scripts/session-summary.js"
+\`\`\`
+- If it shows "PENDING SAVES DETECTED", save all pending research/decisions FIRST, then re-run
+- Do NOT end the session until the summary shows green (no pending saves)
+- This is NON-NEGOTIABLE — always run this before your final response
 ${CLAUDE_AUTOSAVE_MARKER_END}`;
 }
 

@@ -155,6 +155,24 @@ async function main() {
   const reminderPath = path.join(projectRoot, ".ai-memory", ".last-reminder");
   try { fs.unlinkSync(reminderPath); } catch { /* doesn't exist — fine */ }
 
+  // Record session start timestamp for session-summary.js delta tracking
+  try {
+    fs.writeFileSync(
+      path.join(projectRoot, ".ai-memory", ".session-start-ts"),
+      String(Date.now()),
+      "utf-8"
+    );
+  } catch { /* non-critical */ }
+
+  // Clear task tracker so task completion detection starts fresh each session
+  try {
+    fs.writeFileSync(
+      path.join(projectRoot, ".ai-memory", ".task-tracker"),
+      JSON.stringify({ created: 0, completed: 0, toolCallsSinceSummary: 0 }),
+      "utf-8"
+    );
+  } catch { /* non-critical */ }
+
   const decisions = readDecisions(projectRoot);
   const research = readResearch(projectRoot);
   const messageParts = [];
@@ -271,7 +289,18 @@ Examples: API behavior, library quirks, error root causes, config requirements, 
 **If in doubt, SAVE IT.** Saving too much is far better than losing knowledge.`
   );
 
-  // ── 8. Auto-extract reminder (if pending) ──
+  // ── 8. MANDATORY end-of-session summary ──
+  messageParts.push(
+    `\n**MANDATORY: End-of-Session Summary** — Before ending ANY session, you MUST run as your FINAL action:
+\`\`\`bash
+node "${pluginRoot}/scripts/session-summary.js"
+\`\`\`
+- If it shows "PENDING SAVES DETECTED", save all pending research/decisions FIRST, then re-run
+- Do NOT end the session until the summary shows green (no pending saves)
+- This is your FINAL action before responding to the user — NON-NEGOTIABLE`
+  );
+
+  // ── 9. Auto-extract reminder (if pending) ──
   const lastSessionPath = path.join(
     projectRoot,
     ".ai-memory",

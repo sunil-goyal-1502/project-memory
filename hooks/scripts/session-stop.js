@@ -71,6 +71,68 @@ async function main() {
     process.exit(0);
   }
 
+  // Write session summary to file for persistence (backup if Claude didn't run session-summary.js)
+  try {
+    const statsModule = require("../../scripts/stats.js");
+
+    // Read session start timestamp
+    let sessionStartTs = 0;
+    try {
+      sessionStartTs = Number(
+        fs.readFileSync(path.join(projectRoot, ".ai-memory", ".session-start-ts"), "utf-8").trim()
+      );
+    } catch {}
+    const sessionStartIso = sessionStartTs > 0
+      ? new Date(sessionStartTs).toISOString()
+      : new Date(0).toISOString();
+
+    // Count entries added this session
+    let sessionResearch = 0;
+    let sessionDecisions = 0;
+
+    const researchPath = path.join(projectRoot, ".ai-memory", "research.jsonl");
+    if (fs.existsSync(researchPath)) {
+      const content = fs.readFileSync(researchPath, "utf-8").trim();
+      if (content) {
+        for (const line of content.split("\n")) {
+          try {
+            const entry = JSON.parse(line.trim());
+            if ((entry.ts || "") > sessionStartIso) sessionResearch++;
+          } catch {}
+        }
+      }
+    }
+
+    const decisionsPath = path.join(projectRoot, ".ai-memory", "decisions.jsonl");
+    if (fs.existsSync(decisionsPath)) {
+      const content = fs.readFileSync(decisionsPath, "utf-8").trim();
+      if (content) {
+        for (const line of content.split("\n")) {
+          try {
+            const entry = JSON.parse(line.trim());
+            if ((entry.ts || "") > sessionStartIso) sessionDecisions++;
+          } catch {}
+        }
+      }
+    }
+
+    const stats = statsModule.getStats(projectRoot);
+    const summaryLines = [
+      `Session Summary (${new Date().toISOString()})`,
+      `Research saved this session: ${sessionResearch}`,
+      `Decisions saved this session: ${sessionDecisions}`,
+      `Cumulative: ~${statsModule.formatNumber(stats.totalTokensSaved)} tokens (~${statsModule.formatCost(stats.totalTokensSaved)}), ~${statsModule.formatDuration(stats.totalTimeSavedSeconds)} saved`,
+      "",
+    ];
+    fs.writeFileSync(
+      path.join(projectRoot, ".ai-memory", ".session-summary.txt"),
+      summaryLines.join("\n"),
+      "utf-8"
+    );
+  } catch {
+    // Non-critical — don't fail the hook
+  }
+
   if (!transcriptPath || !fs.existsSync(transcriptPath)) {
     // No transcript available
     process.stdout.write(JSON.stringify({}));
