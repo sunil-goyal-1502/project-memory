@@ -22,6 +22,11 @@ const ESCALATION_THRESHOLD = 2; // escalate after this many ignored reminders
 const MATCHED_TOOLS = new Set(["Bash", "WebFetch", "WebSearch", "Task"]);
 const IMMEDIATE_SAVE_TOOLS = new Set(["Task", "WebSearch", "WebFetch"]);
 
+// ANSI colors for visible memory messages
+const M = "\x1b[95m"; // bright magenta
+const B = "\x1b[1m";  // bold
+const R = "\x1b[0m";  // reset
+
 function findProjectRoot(startDir) {
   let dir = startDir;
   while (true) {
@@ -157,11 +162,11 @@ function main() {
     state.lastSaveTs = Math.max(state.lastSaveTs, currentSaveTs);
     writeState(projectRoot, state);
 
-    const blockReason = `[project-memory] You just used ${input.tool_name} — this produces valuable knowledge that WILL BE LOST if not saved.
-SAVE NOW before doing anything else:
-- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"
-- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"
-Your next tool call will be DENIED until you save.`;
+    const blockReason = `${M}${B}[project-memory] You just used ${input.tool_name} — knowledge WILL BE LOST if not saved.${R}
+${M}SAVE NOW before doing anything else:${R}
+${M}- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"${R}
+${M}- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}
+${M}${B}Your next tool call will be DENIED until you save.${R}`;
 
     process.stdout.write(
       JSON.stringify({ decision: "block", reason: blockReason })
@@ -192,20 +197,20 @@ Your next tool call will be DENIED until you save.`;
 
   if (state.reminderCount <= ESCALATION_THRESHOLD) {
     // Gentle nudge via systemMessage
-    const reminder = `[project-memory] You just used a research tool. If you discovered any decisions or research findings, save them NOW before continuing:
-- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"
-- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"
-- Check first: node "${pluginRoot}/scripts/check-memory.js" "keywords"
-Do NOT skip this. Save immediately, then continue your task.`;
+    const reminder = `${M}[project-memory] You just used a research tool. Save any findings NOW:${R}
+${M}- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"${R}
+${M}- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}
+${M}- Check first: node "${pluginRoot}/scripts/check-memory.js" "keywords"${R}
+${M}Do NOT skip this. Save immediately, then continue your task.${R}`;
 
     process.stdout.write(JSON.stringify({ systemMessage: reminder }));
   } else {
     // Escalated block — force Claude to acknowledge
-    const blockReason = `[project-memory] You have been researching for ~${state.reminderCount * 3}+ minutes without saving any findings.
-STOP and save your discoveries before continuing:
-- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"
-- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"
-After saving, you may continue your task.`;
+    const blockReason = `${M}${B}[project-memory] Researching ~${state.reminderCount * 3}+ min without saving!${R}
+${M}STOP and save your discoveries before continuing:${R}
+${M}- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"${R}
+${M}- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}
+${M}After saving, you may continue your task.${R}`;
 
     process.stdout.write(
       JSON.stringify({ decision: "block", reason: blockReason })

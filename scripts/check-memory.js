@@ -154,6 +154,14 @@ if (topDecisions.length > 0) {
   console.log("");
 }
 
+// ── Record that memory was checked (unlocks PreToolUse gate) ──
+const memCheckPath = path.join(dir, ".ai-memory", ".last-memory-check");
+try {
+  fs.writeFileSync(memCheckPath, String(Date.now()), "utf-8");
+} catch {
+  // Non-critical — skip silently
+}
+
 // Record stats and show Memory Status
 const totalMatches = topResearch.length + topDecisions.length;
 
