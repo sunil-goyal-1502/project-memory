@@ -131,6 +131,14 @@ async function main() {
     process.exit(0);
   }
 
+  // Clear memory-check gate so exploration requires a fresh check each session
+  const memCheckPath = path.join(projectRoot, ".ai-memory", ".last-memory-check");
+  try { fs.unlinkSync(memCheckPath); } catch { /* doesn't exist — fine */ }
+
+  // Clear escalation state so reminders start fresh each session
+  const reminderPath = path.join(projectRoot, ".ai-memory", ".last-reminder");
+  try { fs.unlinkSync(reminderPath); } catch { /* doesn't exist — fine */ }
+
   const decisions = readDecisions(projectRoot);
   const research = readResearch(projectRoot);
   const messageParts = [];

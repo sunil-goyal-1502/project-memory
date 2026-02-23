@@ -21,6 +21,13 @@ const path = require("path");
 
 const ESCALATION_THRESHOLD = 2; // deny after this many ignored reminders
 const MATCHED_TOOLS = new Set(["Bash", "WebFetch", "WebSearch", "Task"]);
+const EXPLORATION_SUBAGENTS = new Set(["Explore", "Plan", "general-purpose", "feature-dev:code-explorer", "feature-dev:code-architect"]);
+const MEMORY_CHECK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+
+// ANSI colors for visible memory messages
+const M = "\x1b[95m"; // bright magenta
+const B = "\x1b[1m";  // bold
+const R = "\x1b[0m";  // reset
 
 function findProjectRoot(startDir) {
   let dir = startDir;
@@ -42,6 +49,31 @@ function isSaveCall(input) {
     cmd.includes("save-research") ||
     cmd.includes("check-memory")
   );
+}
+
+/**
+ * Check if check-memory.js was run recently (within MEMORY_CHECK_TTL_MS).
+ */
+function wasMemoryChecked(projectRoot) {
+  const memCheckPath = path.join(projectRoot, ".ai-memory", ".last-memory-check");
+  try {
+    const ts = Number(fs.readFileSync(memCheckPath, "utf-8").trim());
+    return Date.now() - ts < MEMORY_CHECK_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if research.jsonl has any entries.
+ */
+function hasResearch(projectRoot) {
+  try {
+    const stat = fs.statSync(path.join(projectRoot, ".ai-memory", "research.jsonl"));
+    return stat.size > 50; // more than just whitespace
+  } catch {
+    return false;
+  }
 }
 
 function readState(projectRoot) {
@@ -113,6 +145,57 @@ function main() {
     process.exit(0);
   }
 
+  const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
+
+  // ── GATE 1: Exploration tools require memory check first ──
+  // If research exists but check-memory hasn't been run recently, DENY
+  // exploration subagent calls. This forces Claude to consult memory before
+  // re-investigating things already researched in previous sessions.
+  if (input.tool_name === "Task") {
+    const subagentType = (input.tool_input || {}).subagent_type || "";
+    if (EXPLORATION_SUBAGENTS.has(subagentType) && hasResearch(projectRoot)) {
+      if (!wasMemoryChecked(projectRoot)) {
+        const reason = `${M}${B}[project-memory] BLOCKED: You MUST check memory before exploring.${R}
+${M}Research findings exist from previous sessions. Run check-memory FIRST:${R}
+${M}  node "${pluginRoot}/scripts/check-memory.js" "relevant keywords"${R}
+${M}If memory covers what you need, USE it directly. Only explore if no matches found.${R}`;
+
+        process.stdout.write(
+          JSON.stringify({
+            hookSpecificOutput: {
+              hookEventName: "PreToolUse",
+              permissionDecision: "deny",
+              permissionDecisionReason: reason,
+            },
+          })
+        );
+        process.exit(0);
+      }
+    }
+  }
+
+  // ── GATE 2: WebSearch/WebFetch also require memory check ──
+  if ((input.tool_name === "WebSearch" || input.tool_name === "WebFetch") && hasResearch(projectRoot)) {
+    if (!wasMemoryChecked(projectRoot)) {
+      const reason = `${M}${B}[project-memory] BLOCKED: Check memory before web searching.${R}
+${M}Research findings may already have what you need. Run check-memory FIRST:${R}
+${M}  node "${pluginRoot}/scripts/check-memory.js" "relevant keywords"${R}
+${M}Only search the web if no relevant matches found in memory.${R}`;
+
+      process.stdout.write(
+        JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: reason,
+          },
+        })
+      );
+      process.exit(0);
+    }
+  }
+
+  // ── GATE 3: Escalation-based denial (save reminders exceeded) ──
   const state = readState(projectRoot);
 
   // Not escalated yet — allow
@@ -130,8 +213,10 @@ function main() {
   }
 
   // Escalated and no save — DENY the tool call
-  const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
-  const reason = `[project-memory] BLOCKED: You have received ${state.reminderCount} save reminders without saving any findings.\nYou MUST save your discoveries NOW before using any more research tools:\n- node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"\n- node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"`;
+  const reason = `${M}${B}[project-memory] BLOCKED: ${state.reminderCount} save reminders ignored.${R}
+${M}You MUST save your discoveries NOW before using any more research tools:${R}
+${M}- node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"${R}
+${M}- node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}`;
 
   process.stdout.write(
     JSON.stringify({
