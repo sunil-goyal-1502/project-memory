@@ -79,36 +79,38 @@ function summarizeDecisions(decisions) {
   return parts.join(", ");
 }
 
+const STALENESS_DAYS = 7; // Research older than this is considered stale
+
 /**
- * Format research findings with truncated content so Claude can actually USE them.
- * Returns a multi-line string with each finding's topic + truncated finding text.
- * Uses a total budget of ~12000 chars across all findings to stay within
- * reasonable system message limits while maximizing content per finding.
+ * Format research findings — full content, no truncation.
+ * Filters out stale research (older than STALENESS_DAYS).
+ * Returns { text, freshCount, staleCount }.
  */
 function formatResearchFindings(research) {
-  if (research.length === 0) return "";
+  if (research.length === 0) return { text: "", freshCount: 0, staleCount: 0 };
 
-  // Sort by timestamp descending (most recent first), cap at 30
-  const sorted = [...research].sort((a, b) =>
-    (b.ts || "").localeCompare(a.ts || "")
-  );
-  const capped = sorted.slice(0, 30);
+  const cutoff = new Date(Date.now() - STALENESS_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const fresh = [];
+  const stale = [];
+  for (const r of research) {
+    if ((r.ts || "") < cutoff) {
+      stale.push(r);
+    } else {
+      fresh.push(r);
+    }
+  }
 
-  // Calculate per-finding budget from total budget
-  const TOTAL_BUDGET = 12000; // ~3000 tokens total for all findings
-  const perFinding = Math.max(200, Math.floor(TOTAL_BUDGET / capped.length));
+  // Sort fresh findings by timestamp descending (most recent first)
+  fresh.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
 
-  const lines = capped.map((r) => {
+  // Full content — no truncation
+  const lines = fresh.map((r) => {
     const staleness = r.staleness || "stable";
     const badge = staleness === "stable" ? "" : ` [${staleness}]`;
-    const finding = r.finding || "";
-    const truncated = finding.length > perFinding
-      ? finding.substring(0, perFinding) + "..."
-      : finding;
-    return `- **${r.topic || "untitled"}**${badge}: ${truncated}`;
+    return `- **${r.topic || "untitled"}**${badge}: ${r.finding || ""}`;
   });
 
-  return lines.join("\n");
+  return { text: lines.join("\n"), freshCount: fresh.length, staleCount: stale.length };
 }
 
 async function main() {
@@ -182,26 +184,19 @@ async function main() {
     );
   }
 
-  // ── 3. Research findings (with actual content so Claude can USE them) ──
+  // ── 3. Research findings (full content, staleness-filtered) ──
   if (research.length > 0) {
-    const findingsList = formatResearchFindings(research);
-    messageParts.push(
-      `\nResearch Memory: ${research.length} findings loaded. **USE these instead of re-investigating:**\n${findingsList}`
-    );
+    const { text: findingsList, freshCount, staleCount } = formatResearchFindings(research);
 
-    messageParts.push(
-      `\n**READ FULL FINDINGS** — The summaries above are truncated. For full details, read \`.ai-memory/research.jsonl\` BEFORE reading source files. Reading 1 memory file replaces reading 20+ source files.`
-    );
-
-    if (research.length > 30) {
+    if (freshCount > 0) {
       messageParts.push(
-        `(Showing 30 most recent of ${research.length}. Run check-memory.js for full search.)`
+        `\nResearch Memory: ${freshCount} findings loaded (full content). **USE these — do NOT re-investigate:**\n${findingsList}`
       );
     }
 
-    if (research.length > 100) {
+    if (staleCount > 0) {
       messageParts.push(
-        `Research memory has ${research.length} entries. Consider /project-memory:research-compact.`
+        `\n_(${staleCount} older findings filtered — older than ${STALENESS_DAYS} days. Run check-memory.js to search all including stale.)_`
       );
     }
   }
@@ -219,10 +214,9 @@ async function main() {
 
   messageParts.push(
     `\n**CHECK FIRST — DO NOT explore or investigate what you already know:**
-1. Read the research summaries above — if a topic is covered, USE it. Do NOT re-read source files.
-2. If you need full details beyond the summaries, read \`.ai-memory/research.jsonl\` (1 file vs 20+ source files).
-3. For keyword search: \`node "${pluginRoot}/scripts/check-memory.js" "keywords"\`
-4. ONLY read source files or launch Explore agents for topics NOT covered by saved research.`
+- The research findings above contain FULL content from previous sessions. USE them directly.
+- For keyword search across all findings (including stale): \`node "${pluginRoot}/scripts/check-memory.js" "keywords"\`
+- ONLY read source files or launch Explore agents for topics NOT covered by saved research.`
   );
 
   // ── 6. IMMEDIATE SAVE TRIGGERS ──

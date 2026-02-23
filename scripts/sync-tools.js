@@ -269,34 +269,36 @@ ${decisionsSection || "_No decisions recorded yet._\n"}
 ${CLAUDE_MARKER_END}`;
 }
 
+const STALENESS_DAYS = 7; // Research older than this is considered stale
+
 /**
- * Format research as a list with truncated findings — so Claude can USE the content
- * directly after context clears (when SessionStart systemMessage is lost).
- * Uses a total budget of ~12000 chars across all findings.
+ * Format research as a list with full findings, filtered by staleness.
+ * No truncation — Claude gets complete finding content.
+ * Returns { text, freshCount, staleCount }.
  */
 function formatResearchFindingsList(research) {
-  if (research.length === 0) return "";
+  if (research.length === 0) return { text: "", freshCount: 0, staleCount: 0 };
 
-  const sorted = [...research].sort((a, b) =>
-    (b.ts || "").localeCompare(a.ts || "")
-  );
-  const capped = sorted.slice(0, 30);
+  const cutoff = new Date(Date.now() - STALENESS_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  const fresh = [];
+  const stale = [];
+  for (const r of research) {
+    if ((r.ts || "") < cutoff) {
+      stale.push(r);
+    } else {
+      fresh.push(r);
+    }
+  }
 
-  // Calculate per-finding budget from total budget
-  const TOTAL_BUDGET = 12000;
-  const perFinding = Math.max(200, Math.floor(TOTAL_BUDGET / capped.length));
+  fresh.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
 
-  const lines = capped.map((r) => {
+  const lines = fresh.map((r) => {
     const staleness = r.staleness || "stable";
     const badge = staleness === "stable" ? "" : ` [${staleness}]`;
-    const finding = r.finding || "";
-    const truncated = finding.length > perFinding
-      ? finding.substring(0, perFinding) + "..."
-      : finding;
-    return `- **${r.topic || "untitled"}**${badge}: ${truncated}`;
+    return `- **${r.topic || "untitled"}**${badge}: ${r.finding || ""}`;
   });
 
-  return lines.join("\n");
+  return { text: lines.join("\n"), freshCount: fresh.length, staleCount: stale.length };
 }
 
 function generateClaudeResearchSection(research) {
@@ -306,16 +308,24 @@ function generateClaudeResearchSection(research) {
 
 `;
   if (research.length > 0) {
-    const findingsList = formatResearchFindingsList(research);
-    content += `${research.length} research findings loaded. **USE these instead of re-investigating:**
+    const { text: findingsList, freshCount, staleCount } = formatResearchFindingsList(research);
+
+    if (freshCount > 0) {
+      content += `${freshCount} research findings loaded (full content). **USE these — do NOT re-investigate:**
 
 ${findingsList}
 
-**For full details, read \`.ai-memory/research.jsonl\` BEFORE reading source files.** Reading 1 memory file replaces reading 20+ source files.
+`;
+    }
+
+    if (staleCount > 0) {
+      content += `_(${staleCount} older findings filtered — older than ${STALENESS_DAYS} days. Run check-memory.js to search all including stale.)_
 
 `;
-    if (research.length > 30) {
-      content += `_(Showing 30 most recent of ${research.length}. Run check-memory.js for full search.)_
+    }
+
+    if (freshCount === 0 && staleCount > 0) {
+      content += `_All ${staleCount} findings are older than ${STALENESS_DAYS} days. Run check-memory.js to search them._
 
 `;
     }
