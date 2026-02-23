@@ -49,4 +49,8 @@ try {
   require(path.join(__dirname, "sync-tools.js")).syncAll(dir);
 } catch { /* sync is best-effort */ }
 
-console.log(`Saved decision [${category}]: ${decision}`);
+const statsModule = require(path.join(__dirname, "stats.js"));
+const G = "\x1b[92m";
+const R = "\x1b[0m";
+console.log(`${G}\u2713 [project-memory] Saved decision: [${category}] "${decision}"${R}`);
+console.log(statsModule.formatSavingsInsight("~150 tokens, ~15 sec saved per future session", dir));

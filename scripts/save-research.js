@@ -54,4 +54,8 @@ try {
   require(path.join(__dirname, "sync-tools.js")).syncAll(dir);
 } catch { /* sync is best-effort */ }
 
-console.log(`Saved research [${entry.staleness}]: ${topic}`);
+const statsModule = require(path.join(__dirname, "stats.js"));
+const G = "\x1b[92m";
+const R = "\x1b[0m";
+console.log(`${G}\u2713 [project-memory] Saved research: "${topic}" [${entry.staleness}]${R}`);
+console.log(statsModule.formatSavingsInsight("~1K tokens, ~2 min saved per future lookup", dir));
