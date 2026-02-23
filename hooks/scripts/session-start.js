@@ -15,13 +15,58 @@ const path = require("path");
 function findProjectRoot(startDir) {
   let dir = startDir;
   while (true) {
-    if (fs.existsSync(path.join(dir, ".ai-memory", "decisions.jsonl"))) {
+    if (fs.existsSync(path.join(dir, ".ai-memory"))) {
       return dir;
     }
     const parent = path.dirname(dir);
     if (parent === dir) return null;
     dir = parent;
   }
+}
+
+/**
+ * Windows fallback: when cwd is C:\Windows\System32 (or any system dir),
+ * scan $USERPROFILE and its immediate children for .ai-memory directories.
+ * Returns the most recently modified project root, or null.
+ */
+function scanHomeForProjects() {
+  const home = process.env.USERPROFILE || process.env.HOME;
+  if (!home) return null;
+
+  const candidates = [];
+
+  // Check home itself
+  if (fs.existsSync(path.join(home, ".ai-memory"))) {
+    candidates.push(home);
+  }
+
+  // Check immediate children
+  try {
+    const entries = fs.readdirSync(home, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() && !entry.name.startsWith(".")) {
+        const childPath = path.join(home, entry.name);
+        if (fs.existsSync(path.join(childPath, ".ai-memory"))) {
+          candidates.push(childPath);
+        }
+      }
+    }
+  } catch { /* permission errors, etc */ }
+
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+
+  // Multiple projects: use the one with the most recently modified .ai-memory
+  candidates.sort((a, b) => {
+    try {
+      const aStat = fs.statSync(path.join(a, ".ai-memory"));
+      const bStat = fs.statSync(path.join(b, ".ai-memory"));
+      return bStat.mtimeMs - aStat.mtimeMs;
+    } catch {
+      return 0;
+    }
+  });
+  return candidates[0];
 }
 
 function readDecisions(projectRoot) {
@@ -123,7 +168,12 @@ async function main() {
   }
 
   const cwd = input.cwd || process.cwd();
-  const projectRoot = findProjectRoot(cwd);
+  let projectRoot = findProjectRoot(cwd);
+
+  // Windows fallback: cwd is often C:\Windows\System32 instead of project dir
+  if (!projectRoot) {
+    projectRoot = scanHomeForProjects();
+  }
 
   if (!projectRoot) {
     // No .ai-memory found - output empty (no message)
