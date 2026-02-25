@@ -293,12 +293,21 @@ async function main() {
     }
   }
 
-  // ── 4. CITE MEMORY instruction ──
+  // ── 4. CITE MEMORY instruction with mandatory banner ──
   messageParts.push(
-    `\n**CITE MEMORY** — The decisions and research findings above are REAL knowledge from previous sessions. When they are relevant to your current task:
-1. START your response with: > [project-memory] Using saved finding: "<topic>" — <1-line summary>
-2. USE the finding content directly — do NOT re-explore or re-investigate what is already saved above.
-3. This proves to the user that memory is working and avoids wasting time on redundant research.`
+    `\n**CITE MEMORY** — The decisions and research findings above are REAL knowledge from previous sessions. When they are relevant to your current task, you MUST:
+
+1. **Display this green banner** (using backtick code block with the ★ format):
+
+\`★ Memory Hit ──────────────────────────────────────\`
+\`  ✓ Found relevant research in project memory — skipping further exploration.\`
+\`  Matched: "<topic1>", "<topic2>", ...\`
+\`  Savings: ~X,000 tokens, ~Y min of investigation avoided\`
+\`──────────────────────────────────────────────────────\`
+
+2. **USE the finding content directly** — do NOT re-explore or re-investigate what is already saved.
+3. **Estimate savings**: ~1,000 tokens and ~2 min per matched finding used.
+4. This banner is **MANDATORY** every time you use saved memory. It proves to the user that memory is working and shows the value.`
   );
 
   // ── 5. CHECK FIRST instruction ──
