@@ -13,13 +13,11 @@ Search `.ai-memory/research.jsonl` for existing findings before starting new res
 
 2. **Read** `.ai-memory/research.jsonl`. If it doesn't exist or is empty, tell the user: "No research findings recorded yet. Proceed with your investigation."
 
-3. **Search and rank** results by relevance:
-   - **Exact tag match**: +3 points per matching tag
-   - **Topic substring match**: +2 points per keyword found in topic
-   - **Finding substring match**: +1 point per keyword found in finding text
-   - All matching is case-insensitive.
+3. **Semantic evaluation** — YOU are the search engine. Read ALL entries and evaluate semantic relevance to the query:
+   - Match on: **synonyms** ("DB" = "database"), **abbreviations** ("JWT" = "JSON Web Token"), **conceptual overlap** ("error handling" ≈ "exception strategy"), and **architectural relevance**.
+   - Do NOT rely on exact keyword matching — use your understanding of meaning.
 
-4. **Show top 3 results** with full finding details and staleness assessment:
+4. **Show the most relevant results** (up to 5) with full finding details and staleness assessment:
 
    For each match:
    ```
