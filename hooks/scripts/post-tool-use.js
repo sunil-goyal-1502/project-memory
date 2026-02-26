@@ -135,6 +135,121 @@ function isSelfCall(input) {
   );
 }
 
+// ── Intent detection (mirrored from pre-tool-use.js) ──
+
+/**
+ * Layered intent detection for Bash commands.
+ *
+ * Layer 1 (primary): Keyword scoring on tool_input.description — Claude's
+ *   human-readable intent (e.g. "Search for auth patterns" vs "Create dir").
+ *   If exploration keywords outscore operational keywords → exploratory.
+ *   If operational outscore exploration → operational. Ties fall through.
+ *
+ * Layer 2 (fallback): Regex on the command string for clearly exploratory
+ *   commands (grep, curl, git log, etc.). Ambiguous commands like find are
+ *   NOT matched here — they require the description layer to classify.
+ */
+const EXPLORATION_KEYWORDS = [
+  /\bsearch/i, /\binvestigat/i, /\bexplor/i, /\bexamin/i,
+  /\binspect/i, /\bunderstand/i, /\banalyz/i, /\bresearch/i,
+  /\bdebug/i, /\btrac(e|ing)\b/i, /\blook\s*(for|at|into|up)\b/i,
+  /\bfind\s+(out|where|how|what|why)\b/i, /\bidentif/i,
+  /\bdetermin/i, /\bfigure\s+out/i, /\bbrows/i, /\bscan/i,
+  /\bcheck\s+(if|whether|what|how|where|content)/i,
+  /\bwhat\s+(is|are|does)/i, /\bhow\s+(does|do|is|to)/i,
+  /\bwhere\s+(is|are|does)/i, /\blist\s+(all|the|every|content)/i,
+  /\bshow\s+(the|all|me|current)/i, /\bread\b/i, /\bview/i,
+];
+
+const OPERATIONAL_KEYWORDS = [
+  /\bcreat/i, /\bbuild/i, /\brebuild/i, /\binstall/i, /\brun\b/i,
+  /\bstart/i, /\bdeploy/i, /\bpush/i, /\bcommit/i,
+  /\bcompil/i, /\btest/i, /\bserv/i, /\bclean/i,
+  /\bdelet/i, /\bmov/i, /\bcopy/i, /\brenam/i,
+  /\bset\s*up/i, /\bconfigur/i, /\binitializ/i, /\bgenerat/i,
+  /\bwrit/i, /\bmak/i, /\bupdat/i, /\bfix/i,
+  /\bapply/i, /\bexecut/i, /\blaunch/i, /\brestart/i,
+  /\bstop\b/i, /\bkill/i, /\bformat/i, /\blint/i,
+  /\bpropagate/i, /\bcopy.*to\b/i, /\bsync/i,
+];
+
+const EXPLORATION_PATTERNS = [
+  /\bcurl\s/,          // web fetching for research
+  /\bwget\s/,          // web fetching
+  /\bgit\s+log\b/,     // investigating commit history
+  /\bgit\s+show\b/,    // inspecting commits/objects
+  /\bgit\s+blame\b/,   // investigating code authorship
+  /\bgrep\s/,          // searching file contents
+  /\brg\s/,            // ripgrep search
+  /\bag\s/,            // silver searcher
+  /\back\s/,           // ack search
+  /\blocate\s/,        // finding files via index
+  /\bnpm\s+(info|search|view)\b/, // package research
+  /\bpip\s+(show|search)\b/,     // python package research
+];
+
+/**
+ * Commands that are ALWAYS operational — never exploratory.
+ * Checked before any keyword scoring to prevent false positives
+ * from description keywords (e.g., "Create directory for checking memory").
+ */
+const SAFE_OPERATIONAL_PATTERNS = [
+  /^\s*mkdir\b/,         // create directories
+  /^\s*touch\b/,         // create empty files
+  /^\s*cp\b/,            // copy files
+  /^\s*mv\b/,            // move/rename files
+  /^\s*rm\b/,            // remove files
+  /^\s*chmod\b/,         // change permissions
+  /^\s*chown\b/,         // change ownership
+  /^\s*ln\b/,            // create links
+  /^\s*echo\b/,          // print/write text
+  /^\s*printf\b/,        // print formatted text
+  /^\s*cat\s*>/,         // write to file via cat redirect
+  /^\s*npm\s+(install|ci|run|start|build|test)\b/,  // npm operational
+  /^\s*npx\b/,           // run package binaries
+  /^\s*node\b/,          // run node scripts
+  /^\s*git\s+(add|commit|push|pull|checkout|switch|branch|merge|rebase|stash|tag|fetch|clone|init)\b/,
+  /^\s*pip\s+install\b/, // python install
+  /^\s*docker\s+(build|run|push|pull|start|stop|rm|exec)\b/,
+  /^\s*cd\b/,            // change directory
+  /^\s*pwd\b/,           // print working directory
+  /^\s*ls\b/,            // list files (borderline but usually operational)
+];
+
+function isExploratoryBash(input) {
+  if (!input || !input.tool_input) return false;
+  const cmd = input.tool_input.command || "";
+  const desc = (input.tool_input.description || "");
+
+  // Layer 0: Safelist — obviously operational commands, always skip
+  if (SAFE_OPERATIONAL_PATTERNS.some(p => p.test(cmd))) return false;
+
+  // Layer 1: Description-based intent detection
+  if (desc.length > 5) {
+    const explorationScore = EXPLORATION_KEYWORDS.filter(p => p.test(desc)).length;
+    const operationalScore = OPERATIONAL_KEYWORDS.filter(p => p.test(desc)).length;
+
+    debugLog(null, `INTENT: desc="${desc.slice(0, 80)}" explore=${explorationScore} operational=${operationalScore}`);
+
+    if (explorationScore > operationalScore) return true;
+    if (operationalScore > explorationScore) return false;
+    // Tied or zero — fall through to command regex
+  }
+
+  // Layer 2: Command regex fallback (only clearly exploratory commands)
+  return EXPLORATION_PATTERNS.some(p => p.test(cmd));
+}
+
+const EXPLORATION_SUBAGENTS = new Set([
+  "Explore", "Plan", "general-purpose",
+  "feature-dev:code-explorer", "feature-dev:code-architect",
+]);
+
+function isExploratoryTask(input) {
+  const subagentType = (input.tool_input || {}).subagent_type || "";
+  return EXPLORATION_SUBAGENTS.has(subagentType);
+}
+
 // ── Task completion tracking ──
 
 /**
@@ -401,6 +516,21 @@ function main() {
       );
       process.exit(0);
     }
+  }
+
+  // ── Intent-based early exit for operational tools ──
+  // Skip save reminders for operational Bash commands (mkdir, git push, npm install, etc.)
+  if (input.tool_name === "Bash" && !isExploratoryBash(input)) {
+    debugLog(projectRoot, `SKIP: non-exploratory Bash — no save reminder`);
+    process.stdout.write(JSON.stringify({}));
+    process.exit(0);
+  }
+
+  // Skip save reminders for operational Task subagents (code-simplifier, gsd-executor, etc.)
+  if (input.tool_name === "Task" && !isExploratoryTask(input)) {
+    debugLog(projectRoot, `SKIP: non-exploratory Task/${(input.tool_input || {}).subagent_type} — no save reminder`);
+    process.stdout.write(JSON.stringify({}));
+    process.exit(0);
   }
 
   // Read current escalation state

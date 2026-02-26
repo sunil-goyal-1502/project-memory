@@ -179,10 +179,41 @@ const EXPLORATION_PATTERNS = [
   /\bpip\s+(show|search)\b/,     // python package research
 ];
 
+/**
+ * Commands that are ALWAYS operational — never exploratory.
+ * Checked before any keyword scoring to prevent false positives
+ * from description keywords (e.g., "Create directory for checking memory").
+ */
+const SAFE_OPERATIONAL_PATTERNS = [
+  /^\s*mkdir\b/,         // create directories
+  /^\s*touch\b/,         // create empty files
+  /^\s*cp\b/,            // copy files
+  /^\s*mv\b/,            // move/rename files
+  /^\s*rm\b/,            // remove files
+  /^\s*chmod\b/,         // change permissions
+  /^\s*chown\b/,         // change ownership
+  /^\s*ln\b/,            // create links
+  /^\s*echo\b/,          // print/write text
+  /^\s*printf\b/,        // print formatted text
+  /^\s*cat\s*>/,         // write to file via cat redirect
+  /^\s*npm\s+(install|ci|run|start|build|test)\b/,  // npm operational
+  /^\s*npx\b/,           // run package binaries
+  /^\s*node\b/,          // run node scripts
+  /^\s*git\s+(add|commit|push|pull|checkout|switch|branch|merge|rebase|stash|tag|fetch|clone|init)\b/,
+  /^\s*pip\s+install\b/, // python install
+  /^\s*docker\s+(build|run|push|pull|start|stop|rm|exec)\b/,
+  /^\s*cd\b/,            // change directory
+  /^\s*pwd\b/,           // print working directory
+  /^\s*ls\b/,            // list files (borderline but usually operational)
+];
+
 function isExploratoryBash(input) {
   if (!input || !input.tool_input) return false;
   const cmd = input.tool_input.command || "";
   const desc = (input.tool_input.description || "");
+
+  // Layer 0: Safelist — obviously operational commands, always skip
+  if (SAFE_OPERATIONAL_PATTERNS.some(p => p.test(cmd))) return false;
 
   // Layer 1: Description-based intent detection
   if (desc.length > 5) {
