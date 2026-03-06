@@ -209,6 +209,10 @@ async function main() {
   const explorationLogPath = path.join(projectRoot, ".ai-memory", ".exploration-log");
   try { fs.unlinkSync(explorationLogPath); } catch { /* doesn't exist — fine */ }
 
+  // Clear tool history so auto-capture patterns track only this session
+  const toolHistoryPath = path.join(projectRoot, ".ai-memory", ".tool-history");
+  try { fs.unlinkSync(toolHistoryPath); } catch { /* doesn't exist — fine */ }
+
   // Record session start timestamp for session-summary.js delta tracking
   try {
     fs.writeFileSync(

@@ -14,3 +14,4 @@ embeddings.json
 .hook-debug.log
 .session-summary.txt
 .dashboard.pid
+.tool-history

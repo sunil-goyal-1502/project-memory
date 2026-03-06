@@ -200,6 +200,166 @@ function findSimilarEntry(existingEntries, newTopic, newTags) {
   return null;
 }
 
+// ── Tool History & Auto-Capture ──
+
+const TOOL_HISTORY_FILE = ".tool-history";
+const MAX_HISTORY = 50;
+
+/**
+ * Record a tool call result to the rolling history.
+ * entry: { tool, command, description, exitCode, success, ts }
+ */
+function appendToolHistory(projectRoot, entry) {
+  const histPath = path.join(projectRoot, ".ai-memory", TOOL_HISTORY_FILE);
+  const record = { ...entry, ts: new Date().toISOString() };
+  fs.appendFileSync(histPath, JSON.stringify(record) + "\n", "utf-8");
+
+  // Trim to MAX_HISTORY lines
+  try {
+    const lines = fs.readFileSync(histPath, "utf-8").trim().split("\n").filter(Boolean);
+    if (lines.length > MAX_HISTORY) {
+      fs.writeFileSync(histPath, lines.slice(-MAX_HISTORY).join("\n") + "\n", "utf-8");
+    }
+  } catch { /* non-critical */ }
+}
+
+function readToolHistory(projectRoot) {
+  return readJsonl(path.join(projectRoot, ".ai-memory", TOOL_HISTORY_FILE));
+}
+
+function clearToolHistory(projectRoot) {
+  const histPath = path.join(projectRoot, ".ai-memory", TOOL_HISTORY_FILE);
+  try { fs.unlinkSync(histPath); } catch {}
+}
+
+/**
+ * Detect auto-capture patterns and return a research entry if found.
+ * Returns null if no pattern detected.
+ *
+ * Patterns:
+ * 1. RETRY_SUCCESS: Command failed previously, same/similar command now succeeded
+ * 2. EXPLORATION_SUCCESS: Series of exploratory commands, final one succeeded
+ */
+function detectAutoCapture(projectRoot, currentCall) {
+  if (!currentCall.success) return null; // only capture successes
+  if (!currentCall.command && !currentCall.description) return null;
+
+  const history = readToolHistory(projectRoot);
+  if (history.length < 2) return null;
+
+  const currentCmd = (currentCall.command || "").toLowerCase().trim();
+  const currentDesc = (currentCall.description || "").toLowerCase().trim();
+
+  // Pattern 1: RETRY_SUCCESS — same command failed earlier, now succeeded
+  // Look for a failed command in the last 10 entries that's similar
+  const recentFails = history.slice(-10).filter(h =>
+    h.tool === "Bash" && !h.success && h.command
+  );
+
+  for (const fail of recentFails) {
+    const failCmd = (fail.command || "").toLowerCase().trim();
+    // Similar if: same first word (command name) and >50% token overlap
+    const failTokens = tokenize(failCmd);
+    const currentTokens = tokenize(currentCmd);
+    if (failTokens.length === 0 || currentTokens.length === 0) continue;
+
+    // Same command name (first token)
+    if (failTokens[0] !== currentTokens[0]) continue;
+
+    // Token overlap check
+    const failSet = new Set(failTokens);
+    const overlap = currentTokens.filter(t => failSet.has(t)).length;
+    const overlapRatio = overlap / Math.max(failTokens.length, currentTokens.length);
+
+    if (overlapRatio > 0.3) {
+      // Extract meaningful tags from the command
+      const tags = extractCommandTags(currentCall.command || currentCall.description || "");
+      return {
+        topic: "Working command: " + (currentCall.description || currentCall.command || "").slice(0, 80),
+        tags: ["auto-capture", "bash", "retry-success", ...tags],
+        finding: "Command succeeded after previous failure. Working command: " + (currentCall.command || "").slice(0, 300)
+          + (currentCall.description ? " | Purpose: " + currentCall.description.slice(0, 200) : ""),
+        source_tool: "auto-capture",
+      };
+    }
+  }
+
+  // Pattern 2: EXPLORATION_SUCCESS — exploratory command succeeded
+  // after 3+ exploratory commands in a row
+  const recentExploratory = history.slice(-5).filter(h =>
+    h.tool === "Bash" && h.exploratory
+  );
+
+  if (recentExploratory.length >= 3 && currentCall.exploratory && currentCall.success) {
+    const tags = extractCommandTags(currentCall.command || currentCall.description || "");
+    return {
+      topic: "Discovery: " + (currentCall.description || currentCall.command || "").slice(0, 80),
+      tags: ["auto-capture", "exploration", "discovery", ...tags],
+      finding: "Found after " + recentExploratory.length + " exploratory attempts. "
+        + "Command: " + (currentCall.command || "").slice(0, 300)
+        + (currentCall.description ? " | Purpose: " + currentCall.description.slice(0, 200) : ""),
+      source_tool: "auto-capture",
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Extract meaningful tags from a command string.
+ * Identifies tools, file extensions, and key terms.
+ */
+function extractCommandTags(cmdStr) {
+  const tags = new Set();
+  const lower = cmdStr.toLowerCase();
+
+  // Tool names
+  const tools = ["node", "npm", "git", "docker", "curl", "grep", "find", "dotnet", "python", "pip", "powershell"];
+  for (const t of tools) { if (lower.includes(t)) tags.add(t); }
+
+  // File extensions
+  const extMatch = cmdStr.match(/\.\w{1,6}\b/g);
+  if (extMatch) {
+    for (const ext of extMatch) {
+      const e = ext.toLowerCase();
+      if ([".js", ".ts", ".py", ".cs", ".json", ".xml", ".sh", ".ps1", ".md"].includes(e)) {
+        tags.add(e.slice(1)); // remove dot
+      }
+    }
+  }
+
+  // Limit to 5 tags
+  return Array.from(tags).slice(0, 5);
+}
+
+/**
+ * Auto-save a detected capture as research.
+ * Directly appends to research.jsonl (fast, no subprocess spawn).
+ */
+function autoSaveCapture(projectRoot, capture) {
+  const crypto = require("crypto");
+  const researchPath = path.join(projectRoot, ".ai-memory", "research.jsonl");
+
+  const entry = {
+    id: crypto.randomBytes(4).toString("hex"),
+    ts: new Date().toISOString(),
+    topic: capture.topic,
+    tags: capture.tags,
+    finding: capture.finding,
+    entities: [],
+    related_to: [],
+    source_tool: capture.source_tool || "auto-capture",
+    source_context: "Automatically captured from tool usage pattern",
+    confidence: 0.7,
+    staleness: "stable",
+    supersedes: null,
+    version_anchored: null,
+  };
+
+  appendJsonl(researchPath, entry);
+  return entry;
+}
+
 module.exports = {
   findProjectRoot, scanHomeForProjects, resolveProjectRoot,
   readJsonl, appendJsonl, tokenize,
@@ -207,4 +367,6 @@ module.exports = {
   appendBreadcrumb, readExplorationLog, clearExplorationLog, getUnsavedBreadcrumbs, EXPLORATION_LOG_FILE,
   buildBM25Index, bm25Score,
   findSimilarEntry,
+  appendToolHistory, readToolHistory, clearToolHistory, detectAutoCapture, autoSaveCapture, extractCommandTags,
+  TOOL_HISTORY_FILE,
 };
