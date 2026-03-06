@@ -41,116 +41,109 @@ A Claude Code plugin that captures project decisions and research findings acros
 - Node.js >= 18
 - Git
 
-## Installation
+## Installation (One-Click)
 
-### Step 1: Clone the repository
+Clone the repository and run the installer — it handles everything automatically:
+
+**Windows (PowerShell — built-in, no Git Bash needed):**
+```powershell
+git clone https://github.com/project-memory/project-memory.git
+cd project-memory
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+**macOS / Linux:**
+```bash
+git clone https://github.com/project-memory/project-memory.git
+cd project-memory
+bash install.sh
+```
+
+The installer performs all 7 steps automatically:
+
+| Step | What it does |
+|------|-------------|
+| 1 | Checks prerequisites (Node.js >= 18, Git, Claude Code) |
+| 2 | Installs `@huggingface/transformers` + `onnxruntime-node` via npm |
+| 3 | Registers plugin in `~/.claude/plugins/installed_plugins.json` |
+| 4 | Initializes `.ai-memory/` directory with required files |
+| 5 | Builds ONNX embeddings across all projects with `.ai-memory` |
+| 6 | Starts the dashboard at `http://localhost:3777` |
+| 7 | Runs the test suite (39 tests) |
+
+After installation, **restart Claude Code** (close and reopen) to activate the plugin.
+
+### Manual Installation
+
+<details>
+<summary>Click to expand manual steps (if you prefer not to use the installer)</summary>
+
+#### Step 1: Clone and install
 
 ```bash
 git clone https://github.com/project-memory/project-memory.git
 cd project-memory
-```
-
-### Step 2: Install dependencies
-
-```bash
 npm install
 ```
 
-This installs `@huggingface/transformers` and `onnxruntime-node` (~270MB). The ONNX model (~22MB) downloads automatically on first use.
+#### Step 2: Register the plugin
 
-### Step 3: Register the plugin with Claude Code
+Edit `~/.claude/plugins/installed_plugins.json` and add:
 
-Edit `~/.claude/plugins/installed_plugins.json` and add the plugin entry. If the file doesn't exist, create it.
-
-**Windows:**
 ```json
-{
-  "version": 2,
-  "plugins": {
-    "project-memory@project-memory-marketplace": [
-      {
-        "scope": "user",
-        "installPath": "C:\\Users\\YOUR_USERNAME\\project-memory",
-        "version": "1.0.0",
-        "installedAt": "2025-01-01T00:00:00.000Z",
-        "lastUpdated": "2025-01-01T00:00:00.000Z"
-      }
-    ]
+"project-memory@project-memory-marketplace": [
+  {
+    "scope": "user",
+    "installPath": "ABSOLUTE_PATH_TO_project-memory",
+    "version": "1.0.0",
+    "installedAt": "2025-01-01T00:00:00.000Z",
+    "lastUpdated": "2025-01-01T00:00:00.000Z"
   }
-}
+]
 ```
 
-**macOS / Linux:**
-```json
-{
-  "version": 2,
-  "plugins": {
-    "project-memory@project-memory-marketplace": [
-      {
-        "scope": "user",
-        "installPath": "/Users/YOUR_USERNAME/project-memory",
-        "version": "1.0.0",
-        "installedAt": "2025-01-01T00:00:00.000Z",
-        "lastUpdated": "2025-01-01T00:00:00.000Z"
-      }
-    ]
-  }
-}
-```
+Set `installPath` to the **absolute path** where you cloned the repository (e.g., `C:\\Users\\you\\project-memory` on Windows, `/Users/you/project-memory` on macOS).
 
-> **Important:** Set `installPath` to the **absolute path** where you cloned the repository. This points Claude Code directly to the source — changes to the source take effect immediately.
+#### Step 3: Restart Claude Code
 
-If `installed_plugins.json` already has other plugins, add the `"project-memory@project-memory-marketplace"` entry inside the existing `"plugins"` object.
+Close and reopen Claude Code. The plugin hooks load automatically.
 
-### Step 4: Restart Claude Code
+#### Step 4: Initialize memory
 
-Close and reopen Claude Code (or start a new session). The plugin hooks will load automatically.
+In Claude Code, run: `/project-memory:memory-init`
 
-### Step 5: Initialize memory in your project
-
-Open Claude Code in any project directory and run:
-
-```
-/project-memory:memory-init
-```
-
-This creates the `.ai-memory/` directory with the required files.
-
-### Step 6: Build initial embeddings
+#### Step 5: Build embeddings
 
 ```bash
-# Embed entries for the current project
-node /path/to/project-memory/scripts/build-embeddings.js
-
-# Or embed all projects globally
-node /path/to/project-memory/scripts/build-embeddings.js --all
+node scripts/build-embeddings.js --all
 ```
 
-First run downloads the ONNX model (~22MB). Subsequent runs are fast (~50ms per entry).
+#### Step 6: Start dashboard
+
+```bash
+node scripts/dashboard.js --background
+```
+
+</details>
 
 ## Verify Installation
 
-After restarting Claude Code, verify the plugin is working:
+After restarting Claude Code:
 
-1. **Check session start message** — You should see `[project-memory] Loaded: X decisions, Y research` at the start of every session.
+1. **Session start message** — You should see `[project-memory] Loaded: X decisions, Y research`
 
-2. **Test memory search:**
+2. **Memory search:**
    ```bash
-   node /path/to/project-memory/scripts/check-memory.js "test query"
+   node scripts/check-memory.js "test query"
    ```
-   You should see entries ranked by semantic similarity with relevance percentages.
+   Entries ranked by semantic similarity with relevance percentages.
 
-3. **Start the dashboard:**
-   ```bash
-   node /path/to/project-memory/scripts/dashboard.js
-   ```
-   Opens `http://localhost:3777` in your browser.
+3. **Dashboard:** Open `http://localhost:3777`
 
-4. **Run tests:**
+4. **Tests:**
    ```bash
-   node /path/to/project-memory/scripts/tests/test-runner.js
+   node scripts/tests/test-runner.js
    ```
-   All 39 tests should pass.
 
 ## Dashboard
 
