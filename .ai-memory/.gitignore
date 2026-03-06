@@ -1,0 +1,16 @@
+# Transcript data is ephemeral and potentially sensitive
+.last-session.txt
+
+# Embeddings are machine-specific and rebuilt per machine
+embeddings.json
+
+# Session state files
+.exploration-log
+.last-memory-check
+.last-reminder
+.session-start-ts
+.task-tracker
+.last-session-summary
+.hook-debug.log
+.session-summary.txt
+.dashboard.pid

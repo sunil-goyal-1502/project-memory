@@ -154,6 +154,15 @@ async function main() {
       summaryLines.join("\n"),
       "utf-8"
     );
+  // Record session end in dashboard history
+    try {
+      const historyPath = path.join(projectRoot, ".ai-memory", "session-history.jsonl");
+      fs.appendFileSync(historyPath, JSON.stringify({
+        event: "end", ts: new Date().toISOString(), sessionId: sessionId || "unknown",
+        research: sessionResearch, decisions: sessionDecisions,
+      }) + "\n", "utf-8");
+    } catch { /* non-critical */ }
+
   } catch {
     // Non-critical — don't fail the hook
   }

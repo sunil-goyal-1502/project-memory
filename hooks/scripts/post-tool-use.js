@@ -250,6 +250,35 @@ function isExploratoryTask(input) {
   return EXPLORATION_SUBAGENTS.has(subagentType);
 }
 
+// ── Exploration breadcrumb logging ──
+
+/**
+ * Log an exploration breadcrumb for session-summary to surface unsaved explorations.
+ * Uses shared.js appendBreadcrumb. Fast: append-only, no reads.
+ */
+function logExplorationBreadcrumb(projectRoot, input) {
+  try {
+    const shared = require(path.resolve(__dirname, "..", "..", "scripts", "shared.js"));
+    const toolInput = input.tool_input || {};
+    const breadcrumb = { tool: input.tool_name };
+
+    if (input.tool_name === "Task") {
+      breadcrumb.subagent = toolInput.subagent_type || "unknown";
+      breadcrumb.prompt = (toolInput.prompt || "").slice(0, 200);
+    } else if (input.tool_name === "Bash") {
+      breadcrumb.prompt = (toolInput.description || toolInput.command || "").slice(0, 200);
+    } else if (input.tool_name === "WebSearch") {
+      breadcrumb.query = (toolInput.query || "").slice(0, 200);
+    } else if (input.tool_name === "WebFetch") {
+      breadcrumb.url = (toolInput.url || "").slice(0, 200);
+    }
+
+    shared.appendBreadcrumb(projectRoot, breadcrumb);
+  } catch (err) {
+    debugLog(projectRoot, `BREADCRUMB-ERROR: ${err.message}`);
+  }
+}
+
 // ── Task completion tracking ──
 
 /**
@@ -532,6 +561,10 @@ function main() {
     process.stdout.write(JSON.stringify({}));
     process.exit(0);
   }
+
+  // ── Log exploration breadcrumb ──
+  // At this point: it's a MATCHED_TOOL, not a self-call, and IS exploratory.
+  logExplorationBreadcrumb(projectRoot, input);
 
   // Read current escalation state
   const state = readState(projectRoot);
