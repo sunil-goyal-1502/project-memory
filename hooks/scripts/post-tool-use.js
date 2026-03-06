@@ -279,6 +279,49 @@ function logExplorationBreadcrumb(projectRoot, input) {
   }
 }
 
+// ── Tool call recording + auto-capture ──
+
+/**
+ * Record tool call to history and check for auto-capture patterns.
+ * If a pattern is detected (retry success, exploration success),
+ * auto-saves the finding as research.
+ */
+function recordToolCallAndAutoCapture(projectRoot, input) {
+  try {
+    const shared = require(path.resolve(__dirname, "..", "..", "scripts", "shared.js"));
+    const toolInput = input.tool_input || {};
+    const toolResult = input.tool_result || {};
+
+    // Determine success/failure
+    const exitCode = toolResult.exit_code != null ? toolResult.exit_code : (toolResult.isError ? 1 : 0);
+    const success = exitCode === 0 && !toolResult.isError;
+
+    // Build history record
+    const record = {
+      tool: input.tool_name,
+      command: (toolInput.command || "").slice(0, 500),
+      description: (toolInput.description || "").slice(0, 200),
+      exitCode,
+      success,
+      exploratory: input.tool_name === "Bash" ? isExploratoryBash(input) : isExploratoryTask(input),
+    };
+
+    // Append to tool history
+    shared.appendToolHistory(projectRoot, record);
+
+    // Check for auto-capture patterns
+    if (success && input.tool_name === "Bash") {
+      const capture = shared.detectAutoCapture(projectRoot, record);
+      if (capture) {
+        const saved = shared.autoSaveCapture(projectRoot, capture);
+        debugLog(projectRoot, `AUTO-CAPTURE: "${capture.topic}" (id: ${saved.id})`);
+      }
+    }
+  } catch (err) {
+    debugLog(projectRoot, `AUTO-CAPTURE-ERROR: ${err.message}`);
+  }
+}
+
 // ── Task completion tracking ──
 
 /**
@@ -516,6 +559,14 @@ function main() {
 
   debugLog(projectRoot, `projectRoot=${projectRoot || "NULL"} cwd=${cwd} session=${input.session_id || "NONE"}`);
 
+  // Debug: log tool_result structure (remove after confirming)
+  if (input.tool_result) {
+    const tr = input.tool_result;
+    debugLog(projectRoot, `TOOL_RESULT: tool=${input.tool_name} keys=${Object.keys(tr).join(",")} exit=${tr.exit_code} stdout_len=${(tr.stdout||"").length} stderr_len=${(tr.stderr||"").length}`);
+  } else {
+    debugLog(projectRoot, `TOOL_RESULT: null/undefined for ${input.tool_name}`);
+  }
+
   // No .ai-memory directory — no-op
   if (!projectRoot) {
     debugLog(null, `ALLOW: no projectRoot from cwd=${cwd}`);
@@ -545,6 +596,12 @@ function main() {
       );
       process.exit(0);
     }
+  }
+
+  // ── Record ALL tool calls for auto-capture (before early exits) ──
+  // This must run for every Bash command so we can track fail→success patterns
+  if (input.tool_name === "Bash") {
+    recordToolCallAndAutoCapture(projectRoot, input);
   }
 
   // ── Intent-based early exit for operational tools ──
