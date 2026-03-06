@@ -205,6 +205,10 @@ async function main() {
   const reminderPath = path.join(projectRoot, ".ai-memory", ".last-reminder");
   try { fs.unlinkSync(reminderPath); } catch { /* doesn't exist — fine */ }
 
+  // Clear exploration breadcrumb log so it tracks only this session
+  const explorationLogPath = path.join(projectRoot, ".ai-memory", ".exploration-log");
+  try { fs.unlinkSync(explorationLogPath); } catch { /* doesn't exist — fine */ }
+
   // Record session start timestamp for session-summary.js delta tracking
   try {
     fs.writeFileSync(
@@ -221,6 +225,39 @@ async function main() {
       JSON.stringify({ created: 0, completed: 0, toolCallsSinceSummary: 0 }),
       "utf-8"
     );
+  } catch { /* non-critical */ }
+
+  // ── Background services (non-blocking) ──
+  try {
+    const { spawn } = require("child_process");
+
+    // Build embeddings globally (all projects with .ai-memory)
+    const buildScript = path.join(projectRoot, "scripts", "build-embeddings.js");
+    if (fs.existsSync(buildScript)) {
+      const child = spawn(process.execPath, [buildScript, "--all"], {
+        detached: true, stdio: "ignore", windowsHide: true,
+        cwd: projectRoot,
+      });
+      child.unref();
+    }
+
+    // Auto-start global dashboard (skips if already running)
+    const dashboardScript = path.join(projectRoot, "scripts", "dashboard.js");
+    if (fs.existsSync(dashboardScript)) {
+      const child2 = spawn(process.execPath, [dashboardScript, "--background"], {
+        detached: true, stdio: "ignore", windowsHide: true,
+        env: { ...process.env, DASHBOARD_NO_BROWSER: "1" },
+      });
+      child2.unref();
+    }
+  } catch { /* non-critical */ }
+
+  // ── Record session start in dashboard history ──
+  try {
+    const historyPath = path.join(projectRoot, ".ai-memory", "session-history.jsonl");
+    fs.appendFileSync(historyPath, JSON.stringify({
+      event: "start", ts: new Date().toISOString(), sessionId: sessionId || "unknown",
+    }) + "\n", "utf-8");
   } catch { /* non-critical */ }
 
   const decisions = readDecisions(projectRoot);
@@ -339,11 +376,15 @@ node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<ration
 \`\`\`
 Categories: architecture|constraint|convention|testing|scope|unresolved. Examples: tech choices, patterns, naming conventions, scope boundaries, constraints.
 
-**Save research** — When you discover ANYTHING technical, IMMEDIATELY run:
+**Save research** — When you discover ANYTHING technical, save EACH FACT as a SEPARATE entry:
 \`\`\`bash
-node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>" [stable|versioned|volatile]
+node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>" [staleness] [--entities "File,Class,Method"]
 \`\`\`
-Examples: API behavior, library quirks, error root causes, config requirements, workarounds, performance findings.
+**ATOMIC FACTS — MANDATORY**: Each save should be ONE searchable fact (1-2 sentences). NEVER bundle multiple facts into one entry.
+- BAD: One entry covering "Windows verification pipeline architecture" with 500 words
+- GOOD: 4 separate entries: "DomService uses XPathDocument for XPath", "VerificationDetail model has XmlQuery field", etc.
+- Include \`--entities\` with file/class/method names mentioned in the finding (improves search)
+- Include \`--related "id"\` to link to related findings when relevant
 
 **If in doubt, SAVE IT.** Saving too much is far better than losing knowledge.`
   );

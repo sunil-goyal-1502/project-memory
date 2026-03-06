@@ -1,0 +1,20 @@
+{
+  "tokenCount": 102,
+  "lastSync": "2026-03-05T14:14:59.946Z",
+  "sessionCount": 0,
+  "decisionCount": 2,
+  "researchCount": 21,
+  "researchTokenCount": 3272,
+  "stats": {
+    "totalTokensSaved": 70840,
+    "totalTimeSavedSeconds": 9119,
+    "totalHits": 385,
+    "eventCounts": {
+      "session_load_decision": 22,
+      "session_load_research": 231,
+      "research_search_hit": 0,
+      "memory_check_hit": 132,
+      "duplicate_save_avoided": 0
+    }
+  }
+}

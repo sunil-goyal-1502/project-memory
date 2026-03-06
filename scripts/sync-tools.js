@@ -366,11 +366,14 @@ node "${scriptPath}/scripts/save-decision.js" "<category>" "<decision>" "<ration
 Categories: architecture, constraint, convention, testing, scope, unresolved.
 Examples of decisions: tech stack choices, API design patterns, naming conventions, "X is out of scope", testing strategies, "must support Y".
 
-### Save research — run this whenever you discover something technical:
+### Save research — save EACH FACT as a SEPARATE entry:
 \`\`\`bash
-node "${scriptPath}/scripts/save-research.js" "<topic>" "<comma,separated,tags>" "<finding>" [stable|versioned|volatile]
+node "${scriptPath}/scripts/save-research.js" "<topic>" "<tags>" "<finding>" [staleness] [--entities "File,Class,Method"]
 \`\`\`
-Examples of research: API response formats, library quirks, error root causes, config requirements, performance characteristics, workarounds.
+**ATOMIC FACTS**: Each save = ONE searchable fact (1-2 sentences). Never bundle multiple facts.
+- BAD: One 500-word entry about "Windows verification pipeline architecture"
+- GOOD: 4 entries: "DomService uses XPathDocument", "VerificationDetail has XmlQuery field", etc.
+- Use \`--entities\` with file/class/method names for better search indexing.
 
 **If in doubt, SAVE IT. Saving too much is better than losing knowledge.**
 

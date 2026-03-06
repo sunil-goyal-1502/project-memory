@@ -1,0 +1,73 @@
+{
+  "shared.js": [
+    "f8708296"
+  ],
+  "findprojectroot": [
+    "f8708296"
+  ],
+  "readjsonl": [
+    "f8708296"
+  ],
+  "tokenize": [
+    "f8708296"
+  ],
+  "buildbm25index": [
+    "f8708296",
+    "51bceca7"
+  ],
+  "bm25score": [
+    "f8708296",
+    "51bceca7"
+  ],
+  "save-research.js": [
+    "a3cb1a11"
+  ],
+  "entity-index.json": [
+    "a3cb1a11"
+  ],
+  "findsimilarentry": [
+    "a3cb1a11"
+  ],
+  "addtoentityindex": [
+    "a3cb1a11"
+  ],
+  "check-memory.js": [
+    "51bceca7"
+  ],
+  "keywordprefilter": [
+    "51bceca7"
+  ],
+  "readentityindex": [
+    "51bceca7"
+  ],
+  "post-tool-use.js": [
+    "dc0cd4f6"
+  ],
+  "logexplorationbreadcrumb": [
+    "dc0cd4f6"
+  ],
+  "appendbreadcrumb": [
+    "dc0cd4f6"
+  ],
+  "getunsavedbreadcrumbs": [
+    "dc0cd4f6"
+  ],
+  "session-summary.js": [
+    "dc0cd4f6"
+  ],
+  "session-start.js": [
+    "27846346"
+  ],
+  "sync-tools.js": [
+    "27846346"
+  ],
+  "dashboard.js": [
+    "6d9d898a"
+  ],
+  "build-embeddings.js": [
+    "6d9d898a"
+  ],
+  "discoverallprojects": [
+    "6d9d898a"
+  ]
+}

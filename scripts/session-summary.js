@@ -179,8 +179,35 @@ function main() {
     }
   }
 
+  // 4b. Check for unsaved explorations (breadcrumb log)
+  const shared = require(path.join(__dirname, "shared.js"));
+  const unsavedExplorations = shared.getUnsavedBreadcrumbs(projectRoot);
+
   // 5. Output
   const pluginRoot = path.resolve(__dirname, "..").replace(/\\/g, "/");
+
+  // Yellow WARNING if unsaved explorations detected
+  if (unsavedExplorations.length > 0) {
+    console.log("");
+    console.log(
+      `${YB}\u2605 UNSAVED EXPLORATIONS (${unsavedExplorations.length}) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500${R}`
+    );
+    console.log(`${Y}  \u26A0 You explored but did NOT save findings for:${R}`);
+    for (const b of unsavedExplorations.slice(0, 10)) {
+      const label = b.subagent ? `${b.tool}/${b.subagent}` : b.tool;
+      const detail = b.prompt || b.query || b.url || "";
+      console.log(`${Y}  - ${label}: "${detail.slice(0, 80)}"${R}`);
+    }
+    if (unsavedExplorations.length > 10) {
+      console.log(`${Y}  ... and ${unsavedExplorations.length - 10} more${R}`);
+    }
+    console.log(`${Y}  Save findings from these explorations NOW, then re-run:${R}`);
+    console.log(`${Y}  node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}`);
+    console.log(`${Y}  Then re-run: node "${pluginRoot}/scripts/session-summary.js"${R}`);
+    console.log(`${YB}${border}${R}`);
+    console.log("");
+    pendingSaves = true;
+  }
 
   // Yellow WARNING if pending saves
   if (pendingSaves) {

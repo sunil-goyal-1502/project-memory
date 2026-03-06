@@ -4,20 +4,22 @@
 const fs = require("fs");
 const path = require("path");
 
-// Conservative estimates for tokens/time saved per event
+// Savings estimates — ONLY for actual hits, not loads
+// "Hit" = Claude found a relevant entry and used it (avoided re-investigation)
+// "Load" = entry loaded into context (low value — just context, not a hit)
 const TOKENS_SAVED = {
-  session_load_decision: 150,
-  session_load_research: 300,
-  research_search_hit: 1000,
-  memory_check_hit: 1000,
+  session_load_decision: 10,    // minimal — just loading context, not a hit
+  session_load_research: 20,    // minimal — just loading context, not a hit
+  research_search_hit: 1000,    // actual hit — Claude used a finding instead of re-investigating
+  memory_check_hit: 500,        // search hit — entry was relevant to query (per relevant entry, not per total)
   duplicate_save_avoided: 200,
 };
 
 const TIME_SAVED_SEC = {
-  session_load_decision: 15,
-  session_load_research: 45,
-  research_search_hit: 120,
-  memory_check_hit: 120,
+  session_load_decision: 2,     // minimal — just context load
+  session_load_research: 5,     // minimal — just context load
+  research_search_hit: 120,     // actual hit — 2 min of investigation avoided
+  memory_check_hit: 60,         // search hit — 1 min per relevant result
   duplicate_save_avoided: 30,
 };
 
