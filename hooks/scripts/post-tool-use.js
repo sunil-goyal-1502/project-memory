@@ -207,13 +207,12 @@ const SAFE_OPERATIONAL_PATTERNS = [
   /^\s*cat\s*>/,         // write to file via cat redirect
   /^\s*npm\s+(install|ci|run|start|build|test)\b/,  // npm operational
   /^\s*npx\b/,           // run package binaries
-  /^\s*node\b/,          // run node scripts
+  /^\s*node\s+[^-]/,     // run node SCRIPTS (not node -e which is exploratory)
   /^\s*git\s+(add|commit|push|pull|checkout|switch|branch|merge|rebase|stash|tag|fetch|clone|init)\b/,
   /^\s*pip\s+install\b/, // python install
   /^\s*docker\s+(build|run|push|pull|start|stop|rm|exec)\b/,
   /^\s*cd\b/,            // change directory
   /^\s*pwd\b/,           // print working directory
-  /^\s*ls\b/,            // list files (borderline but usually operational)
 ];
 
 function isExploratoryBash(input) {

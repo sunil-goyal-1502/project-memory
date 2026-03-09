@@ -35,6 +35,11 @@ function debugLog(projectRoot, msg) {
 const EXPLORATION_SUBAGENTS = new Set(["Explore", "Plan", "general-purpose", "feature-dev:code-explorer", "feature-dev:code-architect"]);
 const MEMORY_CHECK_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
+function isExploratoryTask(input) {
+  const subagentType = (input.tool_input || {}).subagent_type || "";
+  return EXPLORATION_SUBAGENTS.has(subagentType);
+}
+
 // ANSI colors for visible memory messages
 const M = "\x1b[95m"; // bright magenta
 const B = "\x1b[1m";  // bold
@@ -198,13 +203,12 @@ const SAFE_OPERATIONAL_PATTERNS = [
   /^\s*cat\s*>/,         // write to file via cat redirect
   /^\s*npm\s+(install|ci|run|start|build|test)\b/,  // npm operational
   /^\s*npx\b/,           // run package binaries
-  /^\s*node\b/,          // run node scripts
+  /^\s*node\s+[^-]/,     // run node SCRIPTS (not node -e which is exploratory)
   /^\s*git\s+(add|commit|push|pull|checkout|switch|branch|merge|rebase|stash|tag|fetch|clone|init)\b/,
   /^\s*pip\s+install\b/, // python install
   /^\s*docker\s+(build|run|push|pull|start|stop|rm|exec)\b/,
   /^\s*cd\b/,            // change directory
   /^\s*pwd\b/,           // print working directory
-  /^\s*ls\b/,            // list files (borderline but usually operational)
 ];
 
 function isExploratoryBash(input) {
@@ -373,7 +377,11 @@ ${M}If memory covers what you need, USE it directly. Only explore if no matches 
   // Bash is only blocked when the command is exploratory (curl, grep, git log, etc.)
   // Operational Bash (mkdir, git commit, npm install, etc.) always passes through.
   // Self-calls (save-*/check-memory/session-summary) are already exempted above.
-  const isExploratory = input.tool_name !== "Bash" || isExploratoryBash(input);
+  const isExploratory = input.tool_name === "Bash"
+    ? isExploratoryBash(input)
+    : input.tool_name === "Task"
+      ? isExploratoryTask(input)
+      : true; // WebSearch, WebFetch are always exploratory
   if (isExploratory && hasResearch(projectRoot)) {
     debugLog(projectRoot, `GATE2: ${input.tool_name} memChecked=${wasMemoryChecked(projectRoot)} exploratory=${isExploratory}`);
     if (!wasMemoryChecked(projectRoot)) {
