@@ -146,8 +146,8 @@ function getUnsavedBreadcrumbs(projectRoot) {
 // ── BM25 Search ──
 
 function buildBM25Index(entries) {
-  const invertedIndex = {};
-  const docLengths = {};
+  const invertedIndex = Object.create(null); // avoids prototype pollution (constructor, toString, etc.)
+  const docLengths = Object.create(null);
   let totalLength = 0;
   for (const entry of entries) {
     const docId = entry.id;
@@ -168,10 +168,10 @@ function buildBM25Index(entries) {
 function bm25Score(query, bm25Index, k1 = 1.2, b = 0.75) {
   const { invertedIndex, docLengths, avgDocLen, N } = bm25Index;
   const queryTerms = tokenize(query);
-  const scores = {};
+  const scores = Object.create(null);
   for (const term of queryTerms) {
     const postings = invertedIndex[term];
-    if (!postings) continue;
+    if (!postings || !Array.isArray(postings)) continue;
     const df = postings.length;
     const idf = Math.max(0, Math.log((N - df + 0.5) / (df + 0.5) + 1));
     for (const { docId, tf } of postings) {
