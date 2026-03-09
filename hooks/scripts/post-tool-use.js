@@ -299,6 +299,62 @@ function logExplorationBreadcrumb(projectRoot, input) {
   }
 }
 
+// ── Proactive memory injection ──
+
+/**
+ * Search saved research for findings relevant to the current tool call.
+ * Uses BM25 (fast, synchronous) to find matches based on command description.
+ * Returns formatted string of top findings, or empty string if none relevant.
+ */
+function getRelevantFindings(projectRoot, input) {
+  try {
+    const shared = require(path.resolve(__dirname, "..", "..", "scripts", "shared.js"));
+    const toolInput = input.tool_input || {};
+
+    // Build search query from description + command
+    const query = [
+      toolInput.description || "",
+      toolInput.prompt || "",
+      toolInput.query || "",
+    ].join(" ").trim();
+
+    if (query.length < 10) return "";
+
+    // Read research entries
+    const researchPath = path.join(projectRoot, ".ai-memory", "research.jsonl");
+    const research = shared.readJsonl(researchPath);
+    if (research.length === 0) return "";
+
+    // BM25 search
+    const index = shared.buildBM25Index(research);
+    const results = shared.bm25Score(query, index);
+
+    // Take top 3 results with score > 0.5
+    const relevant = results.filter(r => r.score > 0.5).slice(0, 3);
+    if (relevant.length === 0) return "";
+
+    // Build findings text
+    const researchMap = {};
+    for (const r of research) researchMap[r.id] = r;
+
+    const lines = [`${G}${B}★ Relevant Memory Found ────────────────────────${R}`];
+    lines.push(`${G}  These saved findings may help — USE them instead of re-investigating:${R}`);
+    for (const { docId, score } of relevant) {
+      const entry = researchMap[docId];
+      if (!entry) continue;
+      lines.push(`${G}  • ${entry.topic || "untitled"} (relevance: ${score.toFixed(1)})${R}`);
+      lines.push(`${G}    ${(entry.finding || "").slice(0, 150)}${R}`);
+    }
+    lines.push(`${G}${B}────────────────────────────────────────────────${R}`);
+
+    debugLog(projectRoot, `AUTO-INJECT: ${relevant.length} findings for "${query.slice(0, 60)}"`);
+    return lines.join("\n");
+  } catch (err) {
+    debugLog(projectRoot, `AUTO-INJECT-ERROR: ${err.message}`);
+    return "";
+  }
+}
+
 // ── Tool call recording + auto-capture ──
 
 /**
@@ -639,6 +695,11 @@ function main() {
     process.exit(0);
   }
 
+  // ── Auto-inject relevant findings for exploratory tools ──
+  // Instead of waiting for Claude to check memory, proactively search
+  // and inject the top relevant findings into the systemMessage.
+  const autoFindings = getRelevantFindings(projectRoot, input);
+
   // ── Log exploration breadcrumb ──
   // At this point: it's a MATCHED_TOOL, not a self-call, and IS exploratory.
   logExplorationBreadcrumb(projectRoot, input);
@@ -710,12 +771,19 @@ ${M}${B}Your next tool call will be DENIED until you save.${R}`;
   writeState(projectRoot, state);
 
   if (state.reminderCount <= ESCALATION_THRESHOLD) {
-    // Gentle nudge via systemMessage
-    const reminder = `${M}[project-memory] You just used a research tool. Save any findings NOW:${R}
-${M}- Decision: node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"${R}
+    // Gentle nudge via systemMessage — include relevant findings if available
+    let reminder = "";
+    if (autoFindings) {
+      reminder = `${autoFindings}
+${M}[project-memory] RELEVANT MEMORY FOUND ABOVE. Use these saved findings instead of re-investigating.${R}
+${M}If you've discovered something NEW, save it:${R}
+${M}  node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}`;
+    } else {
+      reminder = `${M}[project-memory] You just used a research tool. Save any findings NOW:${R}
 ${M}- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}
-${M}- Check first: node "${pluginRoot}/scripts/check-memory.js" "keywords"${R}
+${M}- Check memory: node "${pluginRoot}/scripts/check-memory.js" "keywords"${R}
 ${M}Do NOT skip this. Save immediately, then continue your task.${R}`;
+    }
 
     process.stdout.write(JSON.stringify({ systemMessage: reminder }));
   } else {

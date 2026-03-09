@@ -33,7 +33,7 @@ function debugLog(projectRoot, msg) {
   } catch { /* non-critical */ }
 }
 const EXPLORATION_SUBAGENTS = new Set(["Explore", "Plan", "general-purpose", "feature-dev:code-explorer", "feature-dev:code-architect"]);
-const MEMORY_CHECK_TTL_MS = 10 * 60 * 1000; // 10 minutes
+const MEMORY_CHECK_TTL_MS = 2 * 60 * 1000; // 2 minutes — force frequent re-checks
 
 function isExploratoryTask(input) {
   const subagentType = (input.tool_input || {}).subagent_type || "";
