@@ -695,11 +695,6 @@ function main() {
     process.exit(0);
   }
 
-  // ── Auto-inject relevant findings for exploratory tools ──
-  // Instead of waiting for Claude to check memory, proactively search
-  // and inject the top relevant findings into the systemMessage.
-  const autoFindings = getRelevantFindings(projectRoot, input);
-
   // ── Log exploration breadcrumb ──
   // At this point: it's a MATCHED_TOOL, not a self-call, and IS exploratory.
   logExplorationBreadcrumb(projectRoot, input);

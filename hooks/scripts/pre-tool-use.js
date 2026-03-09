@@ -413,23 +413,25 @@ function main() {
             const G = "\x1b[92m";
             const lines = [];
             lines.push(`${G}${B}★ Memory Cache Hit ─────────────────────────────${R}`);
-            lines.push(`${G}  Found ${relevant.length} relevant saved findings. USE these instead of re-investigating:${R}`);
-            lines.push(`${G}${R}`);
+            lines.push(`${G}  Found ${relevant.length} relevant saved findings:${R}`);
+            lines.push(``);
             for (const { docId, score } of relevant) {
               const entry = researchMap[docId];
               if (!entry) continue;
-              lines.push(`${G}  ► ${entry.topic || "untitled"}${R}`);
-              lines.push(`${G}    ${(entry.finding || "").slice(0, 200)}${R}`);
-              lines.push(`${G}${R}`);
+              lines.push(`${G}  ► ${entry.topic || "untitled"} (score: ${score.toFixed(1)})${R}`);
+              lines.push(`${G}    ${(entry.finding || "").slice(0, 300)}${R}`);
+              lines.push(``);
             }
-            lines.push(`${G}  If these cover what you need, skip the exploration.${R}`);
-            lines.push(`${G}  If you need something different, proceed — but save new findings after.${R}`);
+            lines.push(`${G}${B}  USE the findings above. Only re-explore if they are insufficient.${R}`);
             lines.push(`${G}${B}─────────────────────────────────────────────────${R}`);
 
             debugLog(projectRoot, `CACHE-HIT: ${relevant.length} findings for "${query.slice(0, 50)}"`);
 
-            // ALLOW the tool but inject findings as systemMessage
-            process.stdout.write(JSON.stringify({ systemMessage: lines.join("\n") }));
+            // BLOCK the tool — force Claude to use cached findings first
+            process.stdout.write(JSON.stringify({
+              decision: "block",
+              reason: lines.join("\n"),
+            }));
             process.exit(0);
           } else {
             debugLog(projectRoot, `CACHE-MISS: no relevant findings for "${query.slice(0, 50)}"`);
