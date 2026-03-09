@@ -213,6 +213,10 @@ async function main() {
   const toolHistoryPath = path.join(projectRoot, ".ai-memory", ".tool-history");
   try { fs.unlinkSync(toolHistoryPath); } catch { /* doesn't exist — fine */ }
 
+  // Clear cache hit log so topic dedup tracks only this session
+  const cacheHitsPath = path.join(projectRoot, ".ai-memory", ".cache-hits");
+  try { fs.unlinkSync(cacheHitsPath); } catch { /* doesn't exist — fine */ }
+
   // Record session start timestamp for session-summary.js delta tracking
   try {
     fs.writeFileSync(

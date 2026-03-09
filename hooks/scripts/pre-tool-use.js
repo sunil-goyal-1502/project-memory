@@ -410,6 +410,25 @@ function main() {
             const researchMap = {};
             for (const r of research) researchMap[r.id] = r;
 
+            // Check if we already showed findings for a similar query recently
+            // to avoid blocking the same topic repeatedly (Claude gets frustrated)
+            const cacheHitLogPath = path.join(projectRoot, ".ai-memory", ".cache-hits");
+            let recentHits = [];
+            try {
+              const content = fs.readFileSync(cacheHitLogPath, "utf-8").trim();
+              if (content) recentHits = content.split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+            } catch {}
+
+            // Check if similar query was shown in last 5 minutes
+            const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+            const queryTokens = new Set(query.toLowerCase().split(/\s+/).filter(t => t.length > 3));
+            const alreadyShown = recentHits.some(h => {
+              if (h.ts < fiveMinAgo) return false;
+              const hitTokens = (h.query || "").toLowerCase().split(/\s+/).filter(t => t.length > 3);
+              const overlap = hitTokens.filter(t => queryTokens.has(t)).length;
+              return overlap >= 2; // 2+ significant words overlap = same topic
+            });
+
             const G = "\x1b[92m";
             const lines = [];
             lines.push(`${G}${B}★ Memory Cache Hit ─────────────────────────────${R}`);
@@ -425,14 +444,25 @@ function main() {
             lines.push(`${G}${B}  USE the findings above. Only re-explore if they are insufficient.${R}`);
             lines.push(`${G}${B}─────────────────────────────────────────────────${R}`);
 
-            debugLog(projectRoot, `CACHE-HIT: ${relevant.length} findings for "${query.slice(0, 50)}"`);
+            // Log this cache hit
+            try {
+              fs.appendFileSync(cacheHitLogPath, JSON.stringify({ ts: Date.now(), query: query.slice(0, 100) }) + "\n", "utf-8");
+            } catch {}
 
-            // BLOCK the tool — force Claude to use cached findings first
-            process.stdout.write(JSON.stringify({
-              decision: "block",
-              reason: lines.join("\n"),
-            }));
-            process.exit(0);
+            debugLog(projectRoot, `CACHE-HIT: ${relevant.length} findings for "${query.slice(0, 50)}" alreadyShown=${alreadyShown}`);
+
+            if (alreadyShown) {
+              // Already showed findings for this topic — inject as systemMessage, don't block
+              process.stdout.write(JSON.stringify({ systemMessage: lines.join("\n") }));
+              process.exit(0);
+            } else {
+              // First time seeing this topic — BLOCK so Claude acknowledges the findings
+              process.stdout.write(JSON.stringify({
+                decision: "block",
+                reason: lines.join("\n"),
+              }));
+              process.exit(0);
+            }
           } else {
             debugLog(projectRoot, `CACHE-MISS: no relevant findings for "${query.slice(0, 50)}"`);
           }

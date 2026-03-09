@@ -15,3 +15,4 @@ embeddings.json
 .session-summary.txt
 .dashboard.pid
 .tool-history
+.cache-hits
