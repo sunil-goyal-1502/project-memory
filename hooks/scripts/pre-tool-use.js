@@ -441,7 +441,7 @@ function main() {
               lines.push(`${G}    ${(entry.finding || "").slice(0, 300)}${R}`);
               lines.push(``);
             }
-            lines.push(`${G}${B}  USE the findings above. Only re-explore if they are insufficient.${R}`);
+            lines.push(`${G}${B}  IMPORTANT: Copy and adapt the commands above instead of writing new scripts.${R}`);
             lines.push(`${G}${B}─────────────────────────────────────────────────${R}`);
 
             // Log this cache hit
@@ -451,18 +451,11 @@ function main() {
 
             debugLog(projectRoot, `CACHE-HIT: ${relevant.length} findings for "${query.slice(0, 50)}" alreadyShown=${alreadyShown}`);
 
-            if (alreadyShown) {
-              // Already showed findings for this topic — inject as systemMessage, don't block
-              process.stdout.write(JSON.stringify({ systemMessage: lines.join("\n") }));
-              process.exit(0);
-            } else {
-              // First time seeing this topic — BLOCK so Claude acknowledges the findings
-              process.stdout.write(JSON.stringify({
-                decision: "block",
-                reason: lines.join("\n"),
-              }));
-              process.exit(0);
-            }
+            // ALWAYS inject as systemMessage — never block.
+            // Blocking causes Claude to treat it as an error and find workarounds.
+            // systemMessage puts findings into context so Claude naturally uses them.
+            process.stdout.write(JSON.stringify({ systemMessage: lines.join("\n") }));
+            process.exit(0);
           } else {
             debugLog(projectRoot, `CACHE-MISS: no relevant findings for "${query.slice(0, 50)}"`);
           }
