@@ -223,7 +223,29 @@ function isExploratoryBash(input) {
   // Layer 0: Safelist — obviously operational commands, always skip
   if (SAFE_OPERATIONAL_PATTERNS.some(p => p.test(cmd))) return false;
 
-  // Layer 1: Description-based intent detection
+  // Layer 1: Command structure analysis — catches pipes, API calls, data parsing
+  const RESEARCH_COMMAND_PATTERNS = [
+    /\bcurl\s/,              // HTTP requests
+    /\bwget\s/,              // HTTP downloads
+    /\|\s*(python|python3|node|jq|grep|awk|sed)\b/,  // piping to parsers
+    /\bgit\s+(log|show|blame|diff)\b/,  // git investigation
+    /\bgrep\b/,              // searching contents
+    /\brg\s/,                // ripgrep
+    /\bfind\s/,              // finding files
+    /\btail\s/,              // reading logs
+    /\bcat\s+[^>]/,          // reading files (not writing)
+    /\bhead\s/,              // reading beginnings
+    /\bwc\s/,                // counting
+    /api-version=/,          // REST API calls
+    /localhost:\d+/,         // hitting local services
+  ];
+
+  if (RESEARCH_COMMAND_PATTERNS.some(p => p.test(cmd))) {
+    debugLog(null, `INTENT: EXPLORATORY by command structure: "${cmd.slice(0, 80)}"`);
+    return true;
+  }
+
+  // Layer 2: Description-based intent detection (keyword scoring)
   if (desc.length > 5) {
     const explorationScore = EXPLORATION_KEYWORDS.filter(p => p.test(desc)).length;
     const operationalScore = OPERATIONAL_KEYWORDS.filter(p => p.test(desc)).length;
@@ -232,10 +254,9 @@ function isExploratoryBash(input) {
 
     if (explorationScore > operationalScore) return true;
     if (operationalScore > explorationScore) return false;
-    // Tied or zero — fall through to command regex
   }
 
-  // Layer 2: Command regex fallback (only clearly exploratory commands)
+  // Layer 3: Command regex fallback
   return EXPLORATION_PATTERNS.some(p => p.test(cmd));
 }
 

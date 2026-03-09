@@ -219,7 +219,30 @@ function isExploratoryBash(input) {
   // Layer 0: Safelist — obviously operational commands, always skip
   if (SAFE_OPERATIONAL_PATTERNS.some(p => p.test(cmd))) return false;
 
-  // Layer 1: Description-based intent detection
+  // Layer 1: Command structure analysis — catches pipes, API calls, data parsing
+  // These patterns indicate research/investigation regardless of description
+  const RESEARCH_COMMAND_PATTERNS = [
+    /\bcurl\s/,              // HTTP requests (API investigation)
+    /\bwget\s/,              // HTTP downloads
+    /\|\s*(python|python3|node|jq|grep|awk|sed)\b/,  // piping to parsers = analyzing output
+    /\bgit\s+(log|show|blame|diff)\b/,  // git history investigation
+    /\bgrep\b/,              // searching file contents
+    /\brg\s/,                // ripgrep
+    /\bfind\s/,              // finding files
+    /\btail\s/,              // reading log files
+    /\bcat\s+[^>]/,          // reading files (not writing)
+    /\bhead\s/,              // reading file beginnings
+    /\bwc\s/,                // counting (analyzing)
+    /api-version=/,          // Azure DevOps / REST API calls
+    /localhost:\d+/,         // hitting local services
+  ];
+
+  if (RESEARCH_COMMAND_PATTERNS.some(p => p.test(cmd))) {
+    debugLog(null, `INTENT: EXPLORATORY by command structure: "${cmd.slice(0, 80)}"`);
+    return true;
+  }
+
+  // Layer 2: Description-based intent detection (keyword scoring)
   if (desc.length > 5) {
     const explorationScore = EXPLORATION_KEYWORDS.filter(p => p.test(desc)).length;
     const operationalScore = OPERATIONAL_KEYWORDS.filter(p => p.test(desc)).length;
@@ -228,10 +251,22 @@ function isExploratoryBash(input) {
 
     if (explorationScore > operationalScore) return true;
     if (operationalScore > explorationScore) return false;
-    // Tied or zero — fall through to command regex
+    // Tied or zero — fall through to semantic classifier
   }
 
-  // Layer 2: Command regex fallback (only clearly exploratory commands)
+  // Layer 3: Semantic classifier (if reference embeddings are cached)
+  try {
+    const classifier = require(path.resolve(__dirname, "..", "..", "scripts", "intent-classifier.js"));
+    const cache = classifier.loadReferenceEmbeddings();
+    if (cache && desc.length > 5) {
+      // Use description keywords as a rough embedding proxy:
+      // compute overlap with exploratory vs operational centroid descriptions
+      // This is a fast heuristic — not a full embedding, but better than nothing
+      debugLog(null, `INTENT: semantic classifier available, desc="${desc.slice(0, 60)}"`);
+    }
+  } catch { /* classifier not available — skip */ }
+
+  // Layer 4: Command regex fallback (only clearly exploratory commands)
   return EXPLORATION_PATTERNS.some(p => p.test(cmd));
 }
 

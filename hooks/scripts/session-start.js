@@ -235,6 +235,15 @@ async function main() {
   try {
     const { spawn } = require("child_process");
 
+    // Build intent classifier reference embeddings (if not cached)
+    const classifierScript = path.join(projectRoot, "scripts", "intent-classifier.js");
+    if (fs.existsSync(classifierScript) && !fs.existsSync(path.join(projectRoot, ".ai-memory", ".intent-embeddings.json"))) {
+      const child0 = spawn(process.execPath, [classifierScript, "--build"], {
+        detached: true, stdio: "ignore", windowsHide: true, cwd: projectRoot,
+      });
+      child0.unref();
+    }
+
     // Build embeddings globally (all projects with .ai-memory)
     const buildScript = path.join(projectRoot, "scripts", "build-embeddings.js");
     if (fs.existsSync(buildScript)) {
