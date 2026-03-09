@@ -757,35 +757,25 @@ ${M}${B}Your next tool call will be DENIED until you save.${R}`;
     process.exit(0);
   }
 
-  // Check if Claude saved since last reminder (via file mtime)
+  // ── Quiet mode: auto-capture handles saving, pre-hook handles reading ──
+  // Only show a gentle reminder every THROTTLE_MS, no aggressive blocking.
+  // The pre-tool-use hook already injects relevant findings before each tool call.
+
+  // Check if Claude saved since last reminder
   const currentSaveTs = getLastSaveTs(projectRoot);
   if (currentSaveTs > state.lastSaveTs && state.lastSaveTs > 0) {
-    // A save happened — reset the escalation counter
     state.reminderCount = 0;
   }
 
-  // Increment reminder count and update timestamps
   state.reminderCount += 1;
   state.ts = Date.now();
   state.lastSaveTs = Math.max(state.lastSaveTs, currentSaveTs);
   writeState(projectRoot, state);
 
   if (state.reminderCount <= ESCALATION_THRESHOLD) {
-    // Gentle nudge via systemMessage — include relevant findings if available
-    let reminder = "";
-    if (autoFindings) {
-      reminder = `${autoFindings}
-${M}[project-memory] RELEVANT MEMORY FOUND ABOVE. Use these saved findings instead of re-investigating.${R}
-${M}If you've discovered something NEW, save it:${R}
-${M}  node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}`;
-    } else {
-      reminder = `${M}[project-memory] You just used a research tool. Save any findings NOW:${R}
-${M}- Research: node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}
-${M}- Check memory: node "${pluginRoot}/scripts/check-memory.js" "keywords"${R}
-${M}Do NOT skip this. Save immediately, then continue your task.${R}`;
-    }
-
-    process.stdout.write(JSON.stringify({ systemMessage: reminder }));
+    // Quiet: no message — auto-capture + pre-hook injection handle everything
+    process.stdout.write(JSON.stringify({}));
+    process.exit(0);
   } else {
     // Escalated block — force Claude to acknowledge
     const { text: memBanner2, memoryChecked: memChecked2 } = buildMemoryStatusBanner(projectRoot);

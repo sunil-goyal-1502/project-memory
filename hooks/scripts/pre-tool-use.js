@@ -374,72 +374,79 @@ function main() {
 
   const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
 
-  // ── GATE 1: Exploration tools require memory check first ──
-  // If research exists but check-memory hasn't been run recently, DENY
-  // exploration subagent calls. This forces Claude to consult memory before
-  // re-investigating things already researched in previous sessions.
-  if (input.tool_name === "Task") {
-    const subagentType = (input.tool_input || {}).subagent_type || "";
-    const researchExists = hasResearch(projectRoot);
-    const memChecked = wasMemoryChecked(projectRoot);
-    debugLog(projectRoot, `GATE1: Task subagent=${subagentType} inSet=${EXPLORATION_SUBAGENTS.has(subagentType)} research=${researchExists} memChecked=${memChecked}`);
-    if (EXPLORATION_SUBAGENTS.has(subagentType) && researchExists) {
-      if (!memChecked) {
-        const reason = `${M}${B}[project-memory] BLOCKED: You MUST check memory before exploring.${R}
-${M}Research findings exist from previous sessions. Run check-memory FIRST:${R}
-${M}  node "${pluginRoot}/scripts/check-memory.js" "relevant keywords"${R}
-${M}If memory covers what you need, USE it directly. Only explore if no matches found.${R}`;
-
-        debugLog(projectRoot, `DENY: GATE1 — Task/${subagentType} blocked, memory not checked`);
-        process.stdout.write(
-          JSON.stringify({
-            hookSpecificOutput: {
-              hookEventName: "PreToolUse",
-              permissionDecision: "deny",
-              permissionDecisionReason: reason,
-            },
-          })
-        );
-        process.exit(0);
-      } else {
-        debugLog(projectRoot, `ALLOW: GATE1 — Task/${subagentType} allowed, memory was checked`);
-      }
-    }
-  }
-
-  // ── GATE 2: Research tools require memory check first ──
-  // Blocks WebSearch, WebFetch, and Task until check-memory.js has been run.
-  // Bash is only blocked when the command is exploratory (curl, grep, git log, etc.)
-  // Operational Bash (mkdir, git commit, npm install, etc.) always passes through.
-  // Self-calls (save-*/check-memory/session-summary) are already exempted above.
+  // ── READ-THROUGH CACHE: Auto-inject relevant memory on exploratory tools ──
+  // Instead of blocking and demanding manual check-memory, the hook itself
+  // searches saved research and injects findings directly. Claude sees them
+  // in context before the tool runs — like a read-through cache.
   const isExploratory = input.tool_name === "Bash"
     ? isExploratoryBash(input)
     : input.tool_name === "Task"
       ? isExploratoryTask(input)
       : true; // WebSearch, WebFetch are always exploratory
-  if (isExploratory && hasResearch(projectRoot)) {
-    debugLog(projectRoot, `GATE2: ${input.tool_name} memChecked=${wasMemoryChecked(projectRoot)} exploratory=${isExploratory}`);
-    if (!wasMemoryChecked(projectRoot)) {
-      const reason = `${M}${B}[project-memory] BLOCKED: You MUST check memory before proceeding.${R}
-${M}Research findings from previous sessions may already have what you need.${R}
-${M}Run check-memory FIRST:${R}
-${M}  node "${pluginRoot}/scripts/check-memory.js" "relevant keywords for your current task"${R}
-${M}If memory covers what you need, USE it directly. Only proceed if no matches found.${R}`;
 
-      debugLog(projectRoot, `DENY: GATE2 — ${input.tool_name} blocked, memory not checked`);
-      process.stdout.write(
-        JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: "PreToolUse",
-            permissionDecision: "deny",
-            permissionDecisionReason: reason,
-          },
-        })
-      );
-      process.exit(0);
+  if (isExploratory && hasResearch(projectRoot)) {
+    debugLog(projectRoot, `CACHE-READ: ${input.tool_name} exploratory=true, searching memory...`);
+
+    // Build search query from tool input
+    const toolInput = input.tool_input || {};
+    const query = [
+      toolInput.description || "",
+      toolInput.prompt || "",
+      toolInput.query || "",
+    ].join(" ").trim();
+
+    if (query.length > 5) {
+      try {
+        const shared = require(path.resolve(__dirname, "..", "..", "scripts", "shared.js"));
+        const researchPath = path.join(projectRoot, ".ai-memory", "research.jsonl");
+        const research = shared.readJsonl(researchPath);
+
+        if (research.length > 0) {
+          const index = shared.buildBM25Index(research);
+          const results = shared.bm25Score(query, index);
+          const relevant = results.filter(r => r.score > 0.5).slice(0, 3);
+
+          if (relevant.length > 0) {
+            const researchMap = {};
+            for (const r of research) researchMap[r.id] = r;
+
+            const G = "\x1b[92m";
+            const lines = [];
+            lines.push(`${G}${B}★ Memory Cache Hit ─────────────────────────────${R}`);
+            lines.push(`${G}  Found ${relevant.length} relevant saved findings. USE these instead of re-investigating:${R}`);
+            lines.push(`${G}${R}`);
+            for (const { docId, score } of relevant) {
+              const entry = researchMap[docId];
+              if (!entry) continue;
+              lines.push(`${G}  ► ${entry.topic || "untitled"}${R}`);
+              lines.push(`${G}    ${(entry.finding || "").slice(0, 200)}${R}`);
+              lines.push(`${G}${R}`);
+            }
+            lines.push(`${G}  If these cover what you need, skip the exploration.${R}`);
+            lines.push(`${G}  If you need something different, proceed — but save new findings after.${R}`);
+            lines.push(`${G}${B}─────────────────────────────────────────────────${R}`);
+
+            debugLog(projectRoot, `CACHE-HIT: ${relevant.length} findings for "${query.slice(0, 50)}"`);
+
+            // ALLOW the tool but inject findings as systemMessage
+            process.stdout.write(JSON.stringify({ systemMessage: lines.join("\n") }));
+            process.exit(0);
+          } else {
+            debugLog(projectRoot, `CACHE-MISS: no relevant findings for "${query.slice(0, 50)}"`);
+          }
+        }
+      } catch (err) {
+        debugLog(projectRoot, `CACHE-ERROR: ${err.message}`);
+      }
     }
+
+    // Mark memory as checked (for TTL gating)
+    try {
+      fs.writeFileSync(path.join(projectRoot, ".ai-memory", ".last-memory-check"), String(Date.now()), "utf-8");
+    } catch {}
+
   } else if (input.tool_name === "Bash" && !isExploratory) {
-    debugLog(projectRoot, `ALLOW: GATE2 — Bash pass-through (non-exploratory)`);
+    debugLog(projectRoot, `ALLOW: non-exploratory Bash pass-through`);
   }
 
   // ── GATE 3: Escalation-based denial (save reminders exceeded) ──
