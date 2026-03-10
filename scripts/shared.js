@@ -275,10 +275,10 @@ function detectAutoCapture(projectRoot, currentCall) {
       // Extract meaningful tags from the command
       const tags = extractCommandTags(currentCall.command || currentCall.description || "");
       return {
-        topic: "Working command: " + (currentCall.description || currentCall.command || "").slice(0, 80),
-        tags: ["auto-capture", "bash", "retry-success", ...tags],
-        finding: "Command succeeded after previous failure. Working command: " + (currentCall.command || "").slice(0, 300)
-          + (currentCall.description ? " | Purpose: " + currentCall.description.slice(0, 200) : ""),
+        topic: "Script: " + (currentCall.description || "").slice(0, 80),
+        tags: ["auto-capture", "bash", "script", "retry-success", ...tags],
+        finding: (currentCall.description ? currentCall.description + ": " : "")
+          + (currentCall.command || ""),
         source_tool: "auto-capture",
       };
     }
@@ -293,11 +293,10 @@ function detectAutoCapture(projectRoot, currentCall) {
   if (recentExploratory.length >= 3 && currentCall.exploratory && currentCall.success) {
     const tags = extractCommandTags(currentCall.command || currentCall.description || "");
     return {
-      topic: "Discovery: " + (currentCall.description || currentCall.command || "").slice(0, 80),
-      tags: ["auto-capture", "exploration", "discovery", ...tags],
-      finding: "Found after " + recentExploratory.length + " exploratory attempts. "
-        + "Command: " + (currentCall.command || "").slice(0, 300)
-        + (currentCall.description ? " | Purpose: " + currentCall.description.slice(0, 200) : ""),
+      topic: "Script: " + (currentCall.description || "").slice(0, 80),
+      tags: ["auto-capture", "bash", "script", "discovery", ...tags],
+      finding: (currentCall.description ? currentCall.description + ": " : "")
+        + (currentCall.command || ""),
       source_tool: "auto-capture",
     };
   }

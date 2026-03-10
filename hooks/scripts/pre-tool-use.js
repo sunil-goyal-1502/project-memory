@@ -438,7 +438,7 @@ function main() {
               const entry = researchMap[docId];
               if (!entry) continue;
               lines.push(`${G}  ► ${entry.topic || "untitled"} (score: ${score.toFixed(1)})${R}`);
-              lines.push(`${G}    ${(entry.finding || "").slice(0, 300)}${R}`);
+              lines.push(`${G}    ${entry.finding || ""}${R}`);
               lines.push(``);
             }
             lines.push(`${G}${B}  IMPORTANT: Copy and adapt the commands above instead of writing new scripts.${R}`);

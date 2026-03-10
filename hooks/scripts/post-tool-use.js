@@ -375,7 +375,7 @@ function recordToolCallAndAutoCapture(projectRoot, input) {
     // Build history record
     const record = {
       tool: input.tool_name,
-      command: (toolInput.command || "").slice(0, 500),
+      command: toolInput.command || "",
       description: (toolInput.description || "").slice(0, 200),
       exitCode,
       success,
