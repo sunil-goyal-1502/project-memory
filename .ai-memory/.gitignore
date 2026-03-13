@@ -16,3 +16,4 @@ embeddings.json
 .dashboard.pid
 .tool-history
 .cache-hits
+.intent-embeddings.json

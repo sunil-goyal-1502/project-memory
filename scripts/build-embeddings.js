@@ -91,6 +91,20 @@ async function buildForProject(projectRoot) {
 
   writeEmbeddings(projectRoot, existing);
   console.log(`${G}[${projectName}] Embeddings saved: ${Object.keys(existing).length} entries${R}`);
+
+  // Backfill graph triples for entries without them
+  try {
+    const configMod = require(path.join(__dirname, "config.js"));
+    const config = configMod.readConfig(projectRoot);
+    if (config.graph?.enabled) {
+      const graphMod = require(path.join(__dirname, "graph.js"));
+      const graphAdded = graphMod.backfillGraph(projectRoot);
+      if (graphAdded > 0) {
+        console.log(`${G}[${projectName}] Graph: ${graphAdded} triples added${R}`);
+      }
+    }
+  } catch { /* graph is optional */ }
+
   return missing.length;
 }
 

@@ -404,7 +404,40 @@ function main() {
         if (research.length > 0) {
           const index = shared.buildBM25Index(research);
           const results = shared.bm25Score(query, index);
-          const relevant = results.filter(r => r.score > 0.5).slice(0, 3);
+          let relevant = results.filter(r => r.score > 0.5).slice(0, 3);
+
+          // Graph expansion: find connected findings not in BM25 results
+          try {
+            const configMod = require(path.resolve(__dirname, "..", "..", "scripts", "config.js"));
+            const config = configMod.readConfig(projectRoot);
+            if (config.graph?.enabled && relevant.length > 0) {
+              const graphMod = require(path.resolve(__dirname, "..", "..", "scripts", "graph.js"));
+              // Collect entities from BM25 hits
+              const hitEntities = [];
+              const researchLookup = {};
+              for (const r of research) researchLookup[r.id] = r;
+              for (const { docId } of relevant) {
+                const entry = researchLookup[docId];
+                if (entry?.entities) hitEntities.push(...entry.entities);
+              }
+              if (hitEntities.length > 0) {
+                const depth = config.graph?.hookExpansionDepth || 1;
+                const expanded = graphMod.expandFromEntities(projectRoot, hitEntities, depth);
+                // Add graph-expanded findings to relevant list
+                const existingIds = new Set(relevant.map(r => r.docId));
+                for (const findingId of expanded.relatedFindingIds) {
+                  if (!existingIds.has(findingId) && researchLookup[findingId]) {
+                    relevant.push({ docId: findingId, score: 0.3 }); // graph-expanded score
+                    existingIds.add(findingId);
+                  }
+                }
+                // Limit total
+                const maxFindings = config.hooks?.maxInjectedFindings || 3;
+                relevant = relevant.slice(0, maxFindings + 2); // BM25 hits + graph extras
+                debugLog(projectRoot, `GRAPH-EXPAND: ${expanded.connections.length} connections, ${expanded.relatedFindingIds.size} findings`);
+              }
+            }
+          } catch { /* graph is optional */ }
 
           if (relevant.length > 0) {
             const researchMap = {};

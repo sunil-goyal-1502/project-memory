@@ -391,6 +391,17 @@ function recordToolCallAndAutoCapture(projectRoot, input) {
       if (capture) {
         const saved = shared.autoSaveCapture(projectRoot, capture);
         debugLog(projectRoot, `AUTO-CAPTURE: "${capture.topic}" (id: ${saved.id})`);
+
+        // Extract graph triples from auto-captured entry
+        try {
+          const configMod = require(path.resolve(__dirname, "..", "..", "scripts", "config.js"));
+          const config = configMod.readConfig(projectRoot);
+          if (config.graph?.enabled) {
+            const graphMod = require(path.resolve(__dirname, "..", "..", "scripts", "graph.js"));
+            const triples = graphMod.extractTriplesFromEntry(saved, []);
+            if (triples.length > 0) graphMod.addTriples(projectRoot, triples, saved.id);
+          }
+        } catch { /* graph is best-effort */ }
       }
     }
   } catch (err) {

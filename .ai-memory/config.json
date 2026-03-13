@@ -1,0 +1,31 @@
+{
+  "searchMode": "hybrid",
+  "graph": {
+    "enabled": true,
+    "expansionDepth": 2,
+    "hookExpansionDepth": 1,
+    "maxExpanded": 5
+  },
+  "embeddings": {
+    "enabled": true,
+    "model": "Xenova/all-MiniLM-L6-v2"
+  },
+  "bm25": {
+    "enabled": true,
+    "k1": 1.2,
+    "b": 0.75
+  },
+  "hooks": {
+    "cacheHitThreshold": 0.5,
+    "maxInjectedFindings": 3,
+    "memoryCheckTTLMinutes": 2,
+    "escalationThreshold": 2,
+    "throttleMinutes": 3,
+    "summaryCheckpointCalls": 20
+  },
+  "autoCapture": {
+    "enabled": true,
+    "retryOverlapRatio": 0.3,
+    "explorationMinCommands": 3
+  }
+}

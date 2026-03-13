@@ -88,6 +88,18 @@ if (parsedEntities.length > 0) {
   addToEntityIndex(dir, parsedEntities, entry.id);
 }
 
+// ── Extract and store graph triples ──
+try {
+  const config = require(path.join(__dirname, "config.js")).readConfig(dir);
+  if (config.graph?.enabled) {
+    const graph = require(path.join(__dirname, "graph.js"));
+    const triples = graph.extractTriplesFromEntry(entry, parsedEntities);
+    if (triples.length > 0) {
+      graph.addTriples(dir, triples, entry.id);
+    }
+  }
+} catch { /* graph is best-effort */ }
+
 // ── Sync to CLAUDE.md / Copilot / Cursor ──
 try {
   require(path.join(__dirname, "sync-tools.js")).syncAll(dir);

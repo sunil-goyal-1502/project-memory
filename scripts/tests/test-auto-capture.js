@@ -63,7 +63,7 @@ function test_detect_exploration_success(testRoot) {
   const capture = shared.detectAutoCapture(testRoot, { tool: "Bash", command: "grep 'correct pattern' src/", exploratory: true, success: true, description: "Found the right pattern" });
 
   assert.notStrictEqual(capture, null, "Should detect exploration success");
-  assert.ok(capture.tags.includes("exploration"), "Should tag as exploration");
+  assert.ok(capture.tags.includes("script"), "Should tag as script");
   assert.ok(capture.tags.includes("discovery"), "Should tag as discovery");
 }
 

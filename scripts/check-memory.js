@@ -78,12 +78,50 @@ async function main() {
       scoreMap[docId] = score;
     }
 
+    // ── Graph expansion (hybrid mode) ──
+    const configMod = require(path.join(__dirname, "config.js"));
+    const config = configMod.readConfig(dir);
+    let graphExpandedIds = new Set();
+
+    if (config.searchMode === "hybrid" || config.searchMode === "graph") {
+      try {
+        const graphMod = require(path.join(__dirname, "graph.js"));
+        // Collect entities from top 5 semantic results
+        const topResults = semanticResults.slice(0, 5);
+        const topEntities = [];
+        for (const { docId } of topResults) {
+          const entry = [...research, ...decisions].find(e => e.id === docId);
+          if (entry?.entities) topEntities.push(...entry.entities);
+        }
+
+        if (topEntities.length > 0) {
+          const depth = config.graph?.expansionDepth || 2;
+          const expanded = graphMod.expandFromEntities(dir, topEntities, depth);
+
+          // Add graph-discovered finding IDs to score map (with a graph bonus)
+          for (const findingId of expanded.relatedFindingIds) {
+            if (!scoreMap[findingId]) {
+              scoreMap[findingId] = 0.01; // small base score for graph-only discoveries
+              graphExpandedIds.add(findingId);
+            }
+          }
+
+          if (expanded.connections.length > 0) {
+            console.log(`${C.magenta}Graph expansion: ${expanded.connections.length} connections from ${topEntities.length} entities (${depth}-hop)${C.reset}`);
+          }
+        }
+      } catch (err) {
+        // Graph is optional — don't fail search
+      }
+    }
+
     // Sort entries by semantic score (descending)
     const rankedResearch = [...research].sort((a, b) => (scoreMap[b.id] || 0) - (scoreMap[a.id] || 0));
     const rankedDecisions = [...decisions].sort((a, b) => (scoreMap[b.id] || 0) - (scoreMap[a.id] || 0));
 
     // ── Instruction block for Claude ──
-    console.log(`${C.green}${C.bold}=== SEMANTIC SEARCH RESULTS ===${C.reset}`);
+    const modeLabel = config.searchMode === "hybrid" ? "semantic + graph" : config.searchMode === "graph" ? "graph" : "semantic";
+    console.log(`${C.green}${C.bold}=== SEARCH RESULTS (${modeLabel}) ===${C.reset}`);
     console.log(`${C.green}Entries ranked by semantic similarity to your query.${C.reset}`);
     console.log(`${C.green}Higher scores = more relevant. Use findings directly — do NOT re-investigate.${C.reset}`);
     console.log("");
@@ -100,7 +138,8 @@ async function main() {
         const confidence = r.confidence != null ? r.confidence : "?";
         const score = scoreMap[r.id];
         const scoreFmt = score != null ? ` | Relevance: ${(score * 100).toFixed(1)}%` : "";
-        console.log(`${C.green}${i + 1}. ${badge} ${r.topic || "untitled"}${scoreFmt}${C.reset}`);
+        const graphTag = graphExpandedIds.has(r.id) ? " [graph-expanded]" : "";
+        console.log(`${C.green}${i + 1}. ${badge} ${r.topic || "untitled"}${scoreFmt}${graphTag}${C.reset}`);
         console.log(`   Tags: ${tags}  |  Confidence: ${confidence}  |  Date: ${date}`);
         console.log(`   Finding: ${r.finding || ""}`);
         console.log("");
