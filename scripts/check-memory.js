@@ -56,6 +56,8 @@ async function main() {
   console.log(`${C.magenta}Mode: semantic search (ONNX embeddings)${C.reset}`);
   console.log("");
 
+  let semanticResults = []; // declared at function scope for stats at the end
+
   if (totalEntries === 0) {
     console.log(`${C.yellow}\u25CB No research or decisions saved yet.${C.reset}`);
     console.log("");
@@ -72,7 +74,7 @@ async function main() {
     }
 
     // ── Semantic search ──
-    const semanticResults = await embeddingsModule.semanticSearch(query, storedEmbeddings);
+    semanticResults = await embeddingsModule.semanticSearch(query, storedEmbeddings);
     const scoreMap = {};
     for (const { docId, score } of semanticResults) {
       scoreMap[docId] = score;
