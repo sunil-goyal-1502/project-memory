@@ -684,7 +684,8 @@ function renderSessions(sessions){
 
 function renderGraph(gs){
   if(!gs || !gs.topEntities || !gs.topEntities.length) return '<div class="empty">No graph data. Run: node scripts/build-embeddings.js --all</div>';
-  let html='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:16px">';
+  let html='<div style="margin-bottom:12px"><a href="/graph" target="_blank" style="color:var(--blue);font-size:0.9rem;text-decoration:none;padding:6px 14px;border:1px solid var(--blue);border-radius:6px;display:inline-block">Open Interactive Graph Visualization &rarr;</a></div>';
+  html+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:16px">';
   html+='<div class="stat-card blue"><div class="label">Entities</div><div class="value">'+gs.totalEntities+'</div></div>';
   html+='<div class="stat-card purple"><div class="label">Triples</div><div class="value">'+gs.totalTriples+'</div></div>';
   html+='<div class="stat-card cyan"><div class="label">Avg Connections</div><div class="value">'+gs.avgConnections+'</div></div>';
@@ -833,6 +834,304 @@ setInterval(fetchData,3000);
 
 const PORT = getPortArg() || DEFAULT_PORT;
 
+const GRAPH_VIZ_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Knowledge Graph - Project Memory</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d1117; color: #e6edf3; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; overflow: hidden; }
+  canvas { display: block; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+  #controls { position: fixed; top: 12px; left: 12px; z-index: 10; display: flex; gap: 8px; align-items: center; }
+  #controls button, #controls select { padding: 5px 12px; background: #161b22; border: 1px solid #30363d; color: #e6edf3; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+  #controls button:hover { border-color: #58a6ff; }
+  #info { position: fixed; top: 12px; right: 12px; z-index: 10; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 12px; font-size: 0.8rem; max-width: 300px; }
+  #info h3 { margin-bottom: 6px; color: #58a6ff; }
+  #info .stat { color: #8b949e; margin: 2px 0; }
+  #tooltip { position: fixed; z-index: 20; background: #161b22; border: 1px solid #58a6ff; border-radius: 6px; padding: 8px 12px; font-size: 0.78rem; pointer-events: none; display: none; max-width: 250px; }
+  #tooltip .name { font-weight: 600; color: #58a6ff; margin-bottom: 4px; }
+  #tooltip .connections { color: #3fb950; }
+  #legend { position: fixed; bottom: 12px; left: 12px; z-index: 10; font-size: 0.7rem; color: #8b949e; display: flex; gap: 12px; }
+  #legend span { display: flex; align-items: center; gap: 4px; }
+  #legend .dot { width: 8px; height: 8px; border-radius: 50%; }
+  a { color: #58a6ff; text-decoration: none; }
+</style>
+</head>
+<body>
+<div id="controls">
+  <a href="/">&#8592; Dashboard</a>
+  <select id="nodeCount" onchange="reload()">
+    <option value="30">30 nodes</option>
+    <option value="50" selected>50 nodes</option>
+    <option value="100">100 nodes</option>
+    <option value="200">200 nodes</option>
+  </select>
+  <button onclick="resetZoom()">Reset View</button>
+</div>
+<div id="info">
+  <h3>Knowledge Graph</h3>
+  <div class="stat" id="statNodes">Nodes: ...</div>
+  <div class="stat" id="statEdges">Edges: ...</div>
+  <div class="stat" id="statTotal">Total entities: ...</div>
+  <div class="stat" style="margin-top:6px;color:#58a6ff">Drag to pan, scroll to zoom, hover for details</div>
+</div>
+<div id="tooltip"><div class="name"></div><div class="connections"></div><div class="edges"></div></div>
+<div id="legend">
+  <span><span class="dot" style="background:#58a6ff"></span>Entity</span>
+  <span><span class="dot" style="background:#3fb950"></span>High connections</span>
+  <span style="color:#30363d">--- related_to</span>
+  <span style="color:#58a6ff">--- uses/calls/depends</span>
+</div>
+<canvas id="canvas"></canvas>
+<script>
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+let W, H, nodes = [], edges = [], dragging = null, hoveredNode = null;
+let camX = 0, camY = 0, zoom = 1;
+
+function resize() { W = canvas.width = window.innerWidth; H = canvas.height = window.innerHeight; }
+window.addEventListener('resize', resize);
+resize();
+
+const EDGE_COLORS = {
+  uses: '#58a6ff', calls: '#58a6ff', depends_on: '#58a6ff', implements: '#58a6ff',
+  returns: '#bc8cff', extends: '#bc8cff', fixes: '#3fb950', requires: '#d29922',
+  produces: '#3fb950', contains: '#8b949e', converts: '#39d353', serializes: '#39d353',
+  pipes_to: '#d29922', related_to: '#21262d', consumes: '#d29922',
+};
+
+async function reload() {
+  const count = document.getElementById('nodeCount').value;
+  const res = await fetch('/api/graph?nodes=' + count);
+  const data = await res.json();
+  document.getElementById('statNodes').textContent = 'Nodes: ' + data.nodes.length;
+  document.getElementById('statEdges').textContent = 'Edges: ' + data.edges.length;
+  document.getElementById('statTotal').textContent = 'Total entities: ' + data.totalEntities;
+
+  // Initialize node positions in a circle
+  nodes = data.nodes.map((n, i) => {
+    const angle = (i / data.nodes.length) * Math.PI * 2;
+    const radius = Math.min(W, H) * 0.35;
+    return { ...n, x: W/2 + Math.cos(angle) * radius, y: H/2 + Math.sin(angle) * radius, vx: 0, vy: 0 };
+  });
+  edges = data.edges;
+
+  // Build node lookup
+  const nodeMap = {};
+  nodes.forEach(n => nodeMap[n.id] = n);
+  edges.forEach(e => { e.sourceNode = nodeMap[e.source]; e.targetNode = nodeMap[e.target]; });
+}
+
+let alpha = 1.0; // cooling factor — starts hot, cools to stable
+const ALPHA_DECAY = 0.995; // how fast it cools (closer to 1 = slower)
+const ALPHA_MIN = 0.001; // stop simulating below this
+
+function tick() {
+  if (alpha < ALPHA_MIN && !dragging) return; // simulation settled
+
+  const k = 0.005;
+  const repulsion = 3000 * alpha; // repulsion decreases as it cools
+  const damping = 0.6;
+  const centerPull = 0.001;
+
+  // Repulsion between all nodes
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      let dx = nodes[j].x - nodes[i].x;
+      let dy = nodes[j].y - nodes[i].y;
+      let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      if (dist > 500) continue; // skip far-apart nodes
+      let force = repulsion / (dist * dist);
+      let fx = (dx / dist) * force;
+      let fy = (dy / dist) * force;
+      nodes[i].vx -= fx; nodes[i].vy -= fy;
+      nodes[j].vx += fx; nodes[j].vy += fy;
+    }
+  }
+
+  // Attraction along edges
+  for (const e of edges) {
+    if (!e.sourceNode || !e.targetNode) continue;
+    let dx = e.targetNode.x - e.sourceNode.x;
+    let dy = e.targetNode.y - e.sourceNode.y;
+    let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    let force = (dist - 150) * k * alpha;
+    let fx = (dx / dist) * force;
+    let fy = (dy / dist) * force;
+    e.sourceNode.vx += fx; e.sourceNode.vy += fy;
+    e.targetNode.vx -= fx; e.targetNode.vy -= fy;
+  }
+
+  // Center pull + damping + cooling
+  for (const n of nodes) {
+    n.vx += (W/2 - n.x) * centerPull;
+    n.vy += (H/2 - n.y) * centerPull;
+    n.vx *= damping; n.vy *= damping;
+    if (n !== dragging) { n.x += n.vx; n.y += n.vy; }
+  }
+
+  // Cool down
+  alpha *= ALPHA_DECAY;
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+  ctx.save();
+  ctx.translate(camX, camY);
+  ctx.scale(zoom, zoom);
+
+  // Draw edges with labels
+  for (const e of edges) {
+    if (!e.sourceNode || !e.targetNode) continue;
+    const sx = e.sourceNode.x, sy = e.sourceNode.y;
+    const tx = e.targetNode.x, ty = e.targetNode.y;
+    const isWeak = e.predicate === 'related_to';
+
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(tx, ty);
+    ctx.strokeStyle = EDGE_COLORS[e.predicate] || '#21262d';
+    ctx.lineWidth = isWeak ? 0.3 : 0.8;
+    ctx.stroke();
+
+    // Edge label at midpoint (skip weak related_to, show when zoomed in)
+    if (!isWeak && zoom > 0.6) {
+      const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+      ctx.fillStyle = EDGE_COLORS[e.predicate] || '#8b949e';
+      ctx.font = '7px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(e.predicate, mx, my - 3);
+    }
+  }
+
+  // Draw nodes
+  for (const n of nodes) {
+    const isHovered = n === hoveredNode;
+    ctx.beginPath();
+    ctx.arc(n.x, n.y, n.size * (isHovered ? 1.5 : 1), 0, Math.PI * 2);
+    const connPct = n.size / 20;
+    ctx.fillStyle = isHovered ? '#58a6ff' : connPct > 0.5 ? '#3fb950' : connPct > 0.2 ? '#58a6ff' : '#8b949e';
+    ctx.fill();
+    ctx.strokeStyle = isHovered ? '#fff' : 'rgba(88,166,255,0.3)';
+    ctx.lineWidth = isHovered ? 2 : 0.5;
+    ctx.stroke();
+
+    // Label for larger or hovered nodes
+    if (n.size > 6 || isHovered) {
+      ctx.fillStyle = isHovered ? '#fff' : '#8b949e';
+      ctx.font = (isHovered ? 'bold ' : '') + Math.max(8, n.size * 0.8) + 'px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(n.id, n.x, n.y + n.size + 12);
+    }
+  }
+
+  ctx.restore();
+}
+
+function animate() {
+  tick();
+  draw();
+  requestAnimationFrame(animate);
+}
+
+// Mouse interaction
+let mouseX = 0, mouseY = 0, isPanning = false, panStartX = 0, panStartY = 0;
+
+canvas.addEventListener('mousemove', e => {
+  mouseX = (e.clientX - camX) / zoom;
+  mouseY = (e.clientY - camY) / zoom;
+
+  if (dragging) {
+    dragging.x = mouseX;
+    dragging.y = mouseY;
+    return;
+  }
+
+  if (isPanning) {
+    camX = e.clientX - panStartX;
+    camY = e.clientY - panStartY;
+    return;
+  }
+
+  // Hover detection
+  hoveredNode = null;
+  for (const n of nodes) {
+    const dx = mouseX - n.x, dy = mouseY - n.y;
+    if (dx*dx + dy*dy < (n.size * 1.5) * (n.size * 1.5)) {
+      hoveredNode = n;
+      break;
+    }
+  }
+
+  const tooltip = document.getElementById('tooltip');
+  if (hoveredNode) {
+    const connEdges = edges.filter(e => e.source === hoveredNode.id || e.target === hoveredNode.id);
+    const grouped = {};
+    connEdges.forEach(e => {
+      const p = e.predicate;
+      if (!grouped[p]) grouped[p] = [];
+      grouped[p].push(e.source === hoveredNode.id ? e.target : e.source);
+    });
+    tooltip.querySelector('.name').textContent = hoveredNode.id;
+    tooltip.querySelector('.connections').textContent = connEdges.length + ' connections';
+    tooltip.querySelector('.edges').innerHTML = Object.entries(grouped)
+      .map(([p, targets]) => '<div style="color:' + (EDGE_COLORS[p]||'#8b949e') + '">' + p + ': ' + targets.slice(0,3).join(', ') + (targets.length > 3 ? ' +' + (targets.length-3) + ' more' : '') + '</div>').join('');
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 15) + 'px';
+    tooltip.style.top = (e.clientY - 10) + 'px';
+    canvas.style.cursor = 'pointer';
+  } else {
+    tooltip.style.display = 'none';
+    canvas.style.cursor = isPanning ? 'grabbing' : 'grab';
+  }
+});
+
+canvas.addEventListener('mousedown', e => {
+  if (hoveredNode) {
+    dragging = hoveredNode;
+    alpha = 0.3; // reheat on drag so nearby nodes adjust
+    canvas.style.cursor = 'grabbing';
+  } else {
+    isPanning = true;
+    panStartX = e.clientX - camX;
+    panStartY = e.clientY - camY;
+  }
+});
+
+canvas.addEventListener('mouseup', () => { dragging = null; isPanning = false; });
+canvas.addEventListener('mouseleave', () => { dragging = null; isPanning = false; });
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = e.deltaY > 0 ? 0.92 : 1.08;
+  const newZoom = Math.max(0.1, Math.min(5, zoom * factor));
+  // Zoom towards mouse cursor: keep the point under cursor fixed
+  camX = e.clientX - (e.clientX - camX) * (newZoom / zoom);
+  camY = e.clientY - (e.clientY - camY) * (newZoom / zoom);
+  zoom = newZoom;
+}, { passive: false });
+
+function resetZoom() {
+  zoom = 1;
+  // Center the graph in the viewport
+  if (nodes.length > 0) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const n of nodes) { minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x); minY = Math.min(minY, n.y); maxY = Math.max(maxY, n.y); }
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    camX = W/2 - cx; camY = H/2 - cy;
+  } else {
+    camX = 0; camY = 0;
+  }
+}
+
+reload().then(animate);
+</script>
+</body>
+</html>`;
+
 async function startServer() {
   // Check if port is already in use (another dashboard instance)
   const free = await isPortFree(PORT);
@@ -860,6 +1159,53 @@ async function startServer() {
       } catch (err) {
         res.end(JSON.stringify({ error: err.message, results: [] }));
       }
+
+    } else if (url.pathname === "/api/graph") {
+      // Graph data for visualization
+      res.writeHead(200, headers);
+      try {
+        const graphMod = require(path.join(__dirname, "graph.js"));
+        const projects = discoverAllProjects();
+        const allTriples = [];
+        for (const p of projects) {
+          const triples = graphMod.readGraph(p);
+          const projName = path.basename(p);
+          for (const t of triples) { t._project = projName; }
+          allTriples.push(...triples);
+        }
+        // Build nodes and edges for visualization
+        // Filter to top entities to keep it readable
+        const adj = graphMod.buildAdjacencyIndex(allTriples);
+        const entityList = Object.keys(adj).map(e => ({ id: e, connections: adj[e].length }))
+          .sort((a, b) => b.connections - a.connections);
+
+        // Take top N entities + all edges between them
+        const maxNodes = parseInt(url.searchParams.get("nodes")) || 50;
+        const topIds = new Set(entityList.slice(0, maxNodes).map(e => e.id));
+
+        const nodes = entityList.slice(0, maxNodes).map(e => ({
+          id: e.id, size: Math.max(4, Math.min(20, e.connections / 2)),
+        }));
+        const edges = [];
+        const edgeSet = new Set();
+        for (const t of allTriples) {
+          if (topIds.has(t.s) && topIds.has(t.o) && t.p !== "mentions") {
+            const key = t.s + "|" + t.p + "|" + t.o;
+            if (!edgeSet.has(key)) {
+              edgeSet.add(key);
+              edges.push({ source: t.s, target: t.o, predicate: t.p });
+            }
+          }
+        }
+        res.end(JSON.stringify({ nodes, edges, totalEntities: entityList.length, totalTriples: allTriples.length }));
+      } catch (err) {
+        res.end(JSON.stringify({ error: err.message, nodes: [], edges: [] }));
+      }
+
+    } else if (url.pathname === "/graph") {
+      // Interactive graph visualization page
+      res.writeHead(200, { "Content-Type": "text/html" });
+      res.end(GRAPH_VIZ_HTML);
 
     } else if (url.pathname === "/api/session-event" && req.method === "POST") {
       let body = "";
