@@ -218,6 +218,26 @@ function getApiData() {
   const totalEntries = allEntries.length;
   const embeddedCount = allEntries.filter(e => allEmbeddedIds.has(e.id)).length;
 
+  // Graph stats (cross-project)
+  let graphStats = { totalTriples: 0, totalEntities: 0, avgConnections: 0, topEntities: [], projectTriples: [] };
+  try {
+    const graphMod = require(path.join(__dirname, "graph.js"));
+    const globalGraph = graphMod.buildGlobalGraph(projects);
+    const entityNames = Object.keys(globalGraph.adjacencyIndex);
+    const topEntities = entityNames
+      .map(e => ({ name: e, connections: globalGraph.adjacencyIndex[e].length }))
+      .sort((a, b) => b.connections - a.connections)
+      .slice(0, 20);
+
+    graphStats = {
+      totalTriples: globalGraph.triples.length,
+      totalEntities: entityNames.length,
+      avgConnections: entityNames.length > 0 ? Math.round(globalGraph.triples.length * 2 / entityNames.length * 10) / 10 : 0,
+      topEntities,
+      projectTriples: globalGraph.projectStats,
+    };
+  } catch { /* graph not available */ }
+
   // Timeline: group entries by date
   const timeline = {};
   for (const e of allEntries) {
@@ -276,6 +296,7 @@ function getApiData() {
     explorationLog: allExplorationLog.slice(-30),
     heatmap,
     heatmapTags,
+    graphStats,
     primaryProject: path.relative(home, primaryRoot).replace(/\\/g, "/"),
     lastUpdated: new Date().toISOString(),
   };
@@ -419,6 +440,7 @@ const DASHBOARD_HTML = `<!DOCTYPE html>
     <div class="tab" data-tab="projects">Projects</div>
     <div class="tab" data-tab="explorations">Explorations</div>
     <div class="tab" data-tab="sessions">Sessions</div>
+    <div class="tab" data-tab="graph">Knowledge Graph</div>
   </div>
   <input type="text" class="search-box" id="searchBox" placeholder="Semantic search across all projects... (powered by embeddings)">
   <div id="searchResults" style="display:none;"></div>
@@ -660,6 +682,32 @@ function renderSessions(sessions){
   }).join('');
 }
 
+function renderGraph(gs){
+  if(!gs || !gs.topEntities || !gs.topEntities.length) return '<div class="empty">No graph data. Run: node scripts/build-embeddings.js --all</div>';
+  let html='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:16px">';
+  html+='<div class="stat-card blue"><div class="label">Entities</div><div class="value">'+gs.totalEntities+'</div></div>';
+  html+='<div class="stat-card purple"><div class="label">Triples</div><div class="value">'+gs.totalTriples+'</div></div>';
+  html+='<div class="stat-card cyan"><div class="label">Avg Connections</div><div class="value">'+gs.avgConnections+'</div></div>';
+  html+='</div>';
+  // Per-project triple counts
+  if(gs.projectTriples&&gs.projectTriples.length){
+    html+='<div style="font-size:0.8rem;color:var(--dim);margin-bottom:12px">Per project: '
+      +gs.projectTriples.filter(p=>p.triples>0).map(p=>esc(p.name)+' ('+p.triples+')').join(', ')+'</div>';
+  }
+  // Top entities as clickable cards
+  html+='<div class="section-title" style="margin-bottom:8px">Top Entities by Connections</div>';
+  html+='<div class="entry-list">';
+  for(const e of gs.topEntities){
+    const barW=Math.min(100,Math.round(e.connections/gs.topEntities[0].connections*100));
+    html+='<div class="entry" style="padding:8px 12px"><div style="display:flex;justify-content:space-between;align-items:center">'
+      +'<span style="font-weight:600;font-size:0.85rem">'+esc(e.name)+'</span>'
+      +'<span style="color:var(--blue);font-size:0.75rem">'+e.connections+' connections</span></div>'
+      +'<div class="progress-bar" style="margin-top:4px"><div class="progress-fill" style="width:'+barW+'%;background:var(--blue)"></div></div></div>';
+  }
+  html+='</div>';
+  return html;
+}
+
 function renderProjects(projects){
   if(!projects||!projects.length)return '<div class="empty">No projects found</div>';
   return '<div class="entry-list">'+projects.map(p=>{
@@ -762,6 +810,7 @@ function render(){
   else if(currentTab==='projects')c.innerHTML=renderProjects(currentData.projects);
   else if(currentTab==='explorations')c.innerHTML=renderExplorations(currentData.explorationLog);
   else if(currentTab==='sessions')c.innerHTML=renderSessions(currentData.sessionHistory);
+  else if(currentTab==='graph')c.innerHTML=renderGraph(currentData.graphStats);
 }
 
 async function fetchData(){
