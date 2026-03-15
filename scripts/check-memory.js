@@ -163,6 +163,33 @@ async function main() {
       }
     }
 
+    // ── Past explorations (raw code exploration outputs) ──
+    try {
+      const explorations = shared.searchExplorations(dir, query);
+      const relevantExplorations = explorations.filter(r => r.score > 0.3).slice(0, 5);
+      if (relevantExplorations.length > 0) {
+        const explorationsDir = path.join(dir, ".ai-memory", "explorations");
+        console.log(`${C.green}${C.bold}=== Past Explorations (${relevantExplorations.length} matches) ===${C.reset}`);
+        console.log(`${C.green}Full raw code exploration outputs saved from previous sessions.${C.reset}`);
+        console.log(`${C.green}Read these files directly for complete context — no re-exploration needed.${C.reset}`);
+        console.log("");
+        for (let i = 0; i < relevantExplorations.length; i++) {
+          const e = relevantExplorations[i].entry;
+          const date = e.ts ? e.ts.substring(0, 10) : "unknown";
+          const charCount = e.charCount || 0;
+          const agent = e.agent || "unknown";
+          const filePath = path.join(explorationsDir, e.filename).replace(/\\/g, "/");
+          const querySnippet = (e.query || "").slice(0, 120);
+          const files = (e.files || []).slice(0, 5).join(", ");
+          console.log(`${C.green}${i + 1}. ${agent} exploration (${date}) — ${charCount} chars${C.reset}`);
+          console.log(`   Query: ${querySnippet}`);
+          if (files) console.log(`   Files: ${files}`);
+          console.log(`   ${C.bold}Read: ${filePath}${C.reset}`);
+          console.log("");
+        }
+      }
+    } catch { /* explorations are optional */ }
+
     // ── Closing directive with mandatory banner template ──
     console.log(`${C.green}${C.bold}>>> EVALUATE the entries above for semantic relevance to: "${query}" <<<${C.reset}`);
     console.log("");

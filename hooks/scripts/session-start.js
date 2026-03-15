@@ -217,6 +217,12 @@ async function main() {
   const cacheHitsPath = path.join(projectRoot, ".ai-memory", ".cache-hits");
   try { fs.unlinkSync(cacheHitsPath); } catch { /* doesn't exist — fine */ }
 
+  // Ensure explorations directory exists for auto-capture of raw exploration output
+  const explorationsDir = path.join(projectRoot, ".ai-memory", "explorations");
+  if (!fs.existsSync(explorationsDir)) {
+    try { fs.mkdirSync(explorationsDir, { recursive: true }); } catch { /* non-critical */ }
+  }
+
   // Record session start timestamp for session-summary.js delta tracking
   try {
     fs.writeFileSync(

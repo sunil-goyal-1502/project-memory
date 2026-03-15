@@ -299,6 +299,171 @@ function logExplorationBreadcrumb(projectRoot, input) {
   }
 }
 
+// ── Exploration Auto-Capture ──
+
+/**
+ * Capture raw output from exploratory Task agents (Explore, Plan, general-purpose).
+ * Saves the complete verbatim output as a markdown file with YAML frontmatter,
+ * indexes it in explorations.jsonl, extracts graph triples, and updates entity index.
+ *
+ * Returns true if capture succeeded, false otherwise.
+ */
+function captureExploration(projectRoot, input) {
+  try {
+    const crypto = require("crypto");
+    const shared = require(path.resolve(__dirname, "..", "..", "scripts", "shared.js"));
+
+    const toolInput = input.tool_input || {};
+    const subagentType = toolInput.subagent_type || "unknown";
+    const prompt = toolInput.prompt || "";
+    const description = toolInput.description || "";
+
+    // Get the raw output — try tool_response first, then tool_result
+    let rawOutput = "";
+    if (input.tool_response) {
+      rawOutput = typeof input.tool_response === "string"
+        ? input.tool_response
+        : JSON.stringify(input.tool_response, null, 2);
+    } else if (input.tool_result) {
+      rawOutput = typeof input.tool_result === "string"
+        ? input.tool_result
+        : JSON.stringify(input.tool_result, null, 2);
+    }
+
+    // Fallback: read from transcript if neither field has content
+    if (!rawOutput || rawOutput.length < 200) {
+      try {
+        if (input.transcript_path && fs.existsSync(input.transcript_path)) {
+          const transcriptContent = fs.readFileSync(input.transcript_path, "utf-8").trim();
+          const lines = transcriptContent.split("\n").filter(Boolean);
+          // Read from the end to find the most recent tool_result
+          for (let i = lines.length - 1; i >= Math.max(0, lines.length - 10); i--) {
+            try {
+              const entry = JSON.parse(lines[i]);
+              if (entry.type === "tool_result" || entry.role === "tool") {
+                const content = entry.content || entry.text || "";
+                if (typeof content === "string" && content.length > 200) {
+                  rawOutput = content;
+                  break;
+                }
+              }
+            } catch { /* skip non-JSON lines */ }
+          }
+        }
+      } catch (err) {
+        debugLog(projectRoot, `EXPLORATION-TRANSCRIPT-FALLBACK-ERROR: ${err.message}`);
+      }
+    }
+
+    // Skip if output is too small to be meaningful
+    if (!rawOutput || rawOutput.length < 200) {
+      debugLog(projectRoot, `EXPLORATION-SKIP: output too small (${(rawOutput || "").length} chars)`);
+      return false;
+    }
+
+    // Generate metadata
+    const id = "exp_" + crypto.randomBytes(4).toString("hex");
+    const ts = new Date().toISOString();
+    const query = (prompt || description).slice(0, 300);
+    const filesMentioned = shared.extractFilePathsFromText(rawOutput);
+    const tags = shared.extractTagsFromPrompt(prompt || description);
+
+    // Extract entities using graph.js
+    let entities = [];
+    try {
+      const graphMod = require(path.resolve(__dirname, "..", "..", "scripts", "graph.js"));
+      entities = graphMod.extractEntitiesFromText(rawOutput).slice(0, 50); // cap at 50
+    } catch { /* graph not available */ }
+
+    // Build filename
+    const tsClean = ts.replace(/[:.]/g, "-").slice(0, 19);
+    const descSlug = shared.sanitizeFilename(description || prompt.slice(0, 60));
+    const filename = `${tsClean}_${descSlug}.md`;
+
+    // Ensure explorations directory exists
+    const explDir = shared.ensureExplorationsDir(projectRoot);
+
+    // Write the markdown file with YAML frontmatter
+    const frontmatter = [
+      "---",
+      `id: ${id}`,
+      `ts: ${ts}`,
+      `agent: ${subagentType}`,
+      `query: "${query.replace(/"/g, '\\"')}"`,
+      `files_mentioned: ${JSON.stringify(filesMentioned.slice(0, 20))}`,
+      `entities: ${JSON.stringify(entities.slice(0, 20))}`,
+      `tags: ${JSON.stringify(tags)}`,
+      "---",
+      "",
+    ].join("\n");
+
+    const filePath = path.join(explDir, filename);
+    fs.writeFileSync(filePath, frontmatter + rawOutput, "utf-8");
+
+    // Append to index
+    shared.appendExplorationIndex(projectRoot, {
+      id,
+      ts,
+      agent: subagentType,
+      query: query.slice(0, 300),
+      files: filesMentioned.slice(0, 20),
+      entities: entities.slice(0, 20),
+      tags,
+      filename,
+      charCount: rawOutput.length,
+    });
+
+    // Extract and store graph triples
+    try {
+      const configMod = require(path.resolve(__dirname, "..", "..", "scripts", "config.js"));
+      const config = configMod.readConfig(projectRoot);
+      if (config.graph?.enabled) {
+        const graphMod = require(path.resolve(__dirname, "..", "..", "scripts", "graph.js"));
+        // Build a synthetic entry for extractTriplesFromEntry
+        const syntheticEntry = {
+          id,
+          topic: description || prompt.slice(0, 100),
+          finding: rawOutput.slice(0, 5000), // cap to avoid extremely slow extraction
+        };
+        const triples = graphMod.extractTriplesFromEntry(syntheticEntry, entities);
+        if (triples.length > 0) {
+          graphMod.addTriples(projectRoot, triples, id);
+        }
+        debugLog(projectRoot, `EXPLORATION-GRAPH: ${triples.length} triples for ${id}`);
+      }
+    } catch (err) {
+      debugLog(projectRoot, `EXPLORATION-GRAPH-ERROR: ${err.message}`);
+    }
+
+    // Update entity index
+    try {
+      if (entities.length > 0) {
+        shared.addToEntityIndex(projectRoot, entities, id);
+      }
+    } catch { /* non-critical */ }
+
+    // Spawn background embedding build (detached, non-blocking)
+    try {
+      const { spawn } = require("child_process");
+      const buildScript = path.resolve(__dirname, "..", "..", "scripts", "build-embeddings.js");
+      if (fs.existsSync(buildScript)) {
+        const child = spawn("node", [buildScript], {
+          detached: true,
+          stdio: "ignore",
+          cwd: projectRoot,
+        });
+        child.unref();
+      }
+    } catch { /* non-critical */ }
+
+    debugLog(projectRoot, `EXPLORATION-CAPTURE: ${id} agent=${subagentType} file=${filename} chars=${rawOutput.length} entities=${entities.length}`);
+    return true;
+  } catch (err) {
+    debugLog(projectRoot, `EXPLORATION-CAPTURE-ERROR: ${err.message}`);
+    return false;
+  }
+}
+
 // ── Proactive memory injection ──
 
 /**
@@ -712,6 +877,13 @@ function main() {
   // ── Log exploration breadcrumb ──
   // At this point: it's a MATCHED_TOOL, not a self-call, and IS exploratory.
   logExplorationBreadcrumb(projectRoot, input);
+
+  // ── Auto-capture raw exploration output for Task agents ──
+  // Saves the complete verbatim output to .ai-memory/explorations/ with graph indexing.
+  // Runs before save reminders so output is captured even if Claude ignores the reminder.
+  if (input.tool_name === "Task" && isExploratoryTask(input)) {
+    captureExploration(projectRoot, input);
+  }
 
   // Read current escalation state
   const state = readState(projectRoot);

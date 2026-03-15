@@ -335,6 +335,29 @@ function getLastSaveTs(projectRoot) {
   return maxMtime;
 }
 
+/**
+ * Search past explorations for relevant matches.
+ * Returns: [{ agent, date, charCount, query, filePath }] (top 3 hits).
+ */
+function searchExplorations(shared, projectRoot, query) {
+  const results = shared.searchExplorations(projectRoot, query);
+  const hits = results.filter(r => r.score > 0.5).slice(0, 3);
+  if (hits.length === 0) return [];
+
+  const explorationsDir = path.join(projectRoot, ".ai-memory", "explorations");
+
+  return hits.map(h => {
+    const entry = h.entry;
+    return {
+      agent: entry.agent || "unknown",
+      date: entry.ts ? entry.ts.substring(0, 10) : "unknown",
+      charCount: entry.charCount || 0,
+      query: (entry.query || "").slice(0, 150),
+      filePath: path.join(explorationsDir, entry.filename).replace(/\\/g, "/"),
+    };
+  });
+}
+
 function main() {
   let input = {};
   let parseError = null;
@@ -492,6 +515,23 @@ function main() {
 
             debugLog(projectRoot, `CACHE-HIT: ${relevant.length} findings for "${query.slice(0, 50)}" alreadyShown=${alreadyShown}`);
 
+            // Search explorations too — append to the same banner if found
+            try {
+              const explorationHits = searchExplorations(shared, projectRoot, query);
+              if (explorationHits.length > 0) {
+                lines.push(``);
+                lines.push(`${C2}${B}★ Past Explorations Found ──────────────────────${R}`);
+                for (const hit of explorationHits) {
+                  lines.push(`${G}${B}  • ${hit.agent} (${hit.date}) — ${hit.charCount} chars${R}`);
+                  lines.push(`${D}    Query: ${hit.query}${R}`);
+                  lines.push(`${G}    Full output: ${hit.filePath}${R}`);
+                  lines.push(``);
+                }
+                lines.push(`${Y}${B}  ▶ Read the exploration file(s) above for complete context.${R}`);
+                lines.push(`${C2}${B}─────────────────────────────────────────────────${R}`);
+              }
+            } catch { /* explorations are optional */ }
+
             // ALWAYS inject as systemMessage — never block.
             // Blocking causes Claude to treat it as an error and find workarounds.
             // systemMessage puts findings into context so Claude naturally uses them.
@@ -499,6 +539,34 @@ function main() {
             process.exit(0);
           } else {
             debugLog(projectRoot, `CACHE-MISS: no relevant findings for "${query.slice(0, 50)}"`);
+
+            // No research hits — try explorations alone
+            try {
+              const explorationHits = searchExplorations(shared, projectRoot, query);
+              if (explorationHits.length > 0) {
+                const G = "\x1b[92m"; // green
+                const C2 = "\x1b[96m"; // cyan
+                const Y = "\x1b[93m"; // yellow
+                const D = "\x1b[2m"; // dim
+                const exploLines = [];
+                exploLines.push(`${C2}${B}★ Past Exploration Found ───────────────────────${R}`);
+                exploLines.push(`${C2}  ${explorationHits.length} past exploration(s) match your current task:${R}`);
+                exploLines.push(``);
+                for (const hit of explorationHits) {
+                  exploLines.push(`${G}${B}  • ${hit.agent} (${hit.date}) — ${hit.charCount} chars${R}`);
+                  exploLines.push(`${D}    Query: ${hit.query}${R}`);
+                  exploLines.push(`${G}    Full output: ${hit.filePath}${R}`);
+                  exploLines.push(``);
+                }
+                exploLines.push(`${Y}${B}  ▶ Read the exploration file(s) above with the Read tool for complete context.${R}`);
+                exploLines.push(`${C2}${B}─────────────────────────────────────────────────${R}`);
+
+                debugLog(projectRoot, `EXPLORATION-HIT: ${explorationHits.length} past explorations for "${query.slice(0, 50)}"`);
+
+                process.stdout.write(JSON.stringify({ systemMessage: exploLines.join("\n") }));
+                process.exit(0);
+              }
+            } catch { /* explorations are optional */ }
           }
         }
       } catch (err) {

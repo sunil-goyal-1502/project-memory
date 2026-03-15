@@ -359,6 +359,128 @@ function autoSaveCapture(projectRoot, capture) {
   return entry;
 }
 
+// ── Exploration Capture Helpers ──
+
+const EXPLORATIONS_DIR = "explorations";
+const EXPLORATIONS_INDEX = "explorations.jsonl";
+
+/**
+ * Ensure the explorations directory exists under .ai-memory/.
+ */
+function ensureExplorationsDir(projectRoot) {
+  const dir = path.join(projectRoot, ".ai-memory", EXPLORATIONS_DIR);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+/**
+ * Read the explorations index (lightweight JSONL with metadata per exploration).
+ */
+function readExplorationsIndex(projectRoot) {
+  const indexPath = path.join(projectRoot, ".ai-memory", EXPLORATIONS_DIR, EXPLORATIONS_INDEX);
+  return readJsonl(indexPath);
+}
+
+/**
+ * Append an entry to the explorations index.
+ */
+function appendExplorationIndex(projectRoot, entry) {
+  const indexPath = path.join(projectRoot, ".ai-memory", EXPLORATIONS_DIR, EXPLORATIONS_INDEX);
+  appendJsonl(indexPath, entry);
+}
+
+/**
+ * Extract file paths mentioned in text.
+ * Matches common source file extensions.
+ */
+function extractFilePathsFromText(text) {
+  if (!text) return [];
+  const paths = new Set();
+  // Match file paths with extensions (e.g., hooks/scripts/post-tool-use.js, src/App.tsx)
+  // Order matters: longer extensions first to avoid partial matches (tsx before ts)
+  const FILE_PATH_RE = /(?:[\w./-]+\/)?[\w.-]+\.(?:tsx|jsx|jsonl|csproj|yaml|toml|hpp|cpp|sln|bat|vue|css|html|json|xml|js|ts|py|cs|sh|ps1|md|yml|rb|go|rs|java|c|h)/gi;
+  let match;
+  while ((match = FILE_PATH_RE.exec(text)) !== null) {
+    const p = match[0];
+    // Skip very short matches that are likely just extensions mentioned in text
+    if (p.length > 4) paths.add(p);
+  }
+  return Array.from(paths);
+}
+
+/**
+ * Sanitize a string for use as a filename.
+ * Removes unsafe chars, truncates, lowercases.
+ */
+function sanitizeFilename(str, maxLen = 60) {
+  if (!str) return "exploration";
+  return str
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")  // replace unsafe chars with hyphens
+    .replace(/-+/g, "-")             // collapse consecutive hyphens
+    .replace(/^-|-$/g, "")           // trim leading/trailing hyphens
+    .slice(0, maxLen) || "exploration";
+}
+
+/**
+ * Extract tags from a prompt/query string.
+ * Identifies meaningful keywords for search.
+ */
+function extractTagsFromPrompt(prompt) {
+  if (!prompt) return [];
+  const tags = new Set();
+  const lower = prompt.toLowerCase();
+
+  // Action keywords
+  const actions = ["explore", "search", "investigate", "analyze", "understand", "check", "review", "find", "debug", "trace"];
+  for (const a of actions) { if (lower.includes(a)) tags.add(a); }
+
+  // Technical terms (extract multi-word identifiers split by hyphens/underscores)
+  const techTerms = prompt.match(/\b[a-z][a-z0-9]*[-_][a-z0-9]+[-_a-z0-9]*/gi) || [];
+  for (const t of techTerms) {
+    if (t.length > 3 && t.length < 30) tags.add(t.toLowerCase());
+  }
+
+  // File extensions mentioned
+  const exts = prompt.match(/\.(?:js|ts|py|cs|json|xml|md|yaml)\b/gi) || [];
+  for (const e of exts) tags.add(e.slice(1).toLowerCase());
+
+  return Array.from(tags).slice(0, 10);
+}
+
+/**
+ * Search explorations using BM25 on the index entries.
+ * Returns: [{ docId, score, entry }] sorted by score descending.
+ */
+function searchExplorations(projectRoot, query) {
+  const entries = readExplorationsIndex(projectRoot);
+  if (entries.length === 0) return [];
+
+  // Build searchable text for each entry
+  const searchableEntries = entries.map(e => ({
+    id: e.id,
+    topic: e.query || "",
+    tags: e.tags || [],
+    finding: [e.query || "", (e.files || []).join(" "), (e.entities || []).join(" "), (e.tags || []).join(" ")].join(" "),
+    entities: e.entities || [],
+    _raw: e,
+  }));
+
+  const index = buildBM25Index(searchableEntries);
+  const results = bm25Score(query, index);
+
+  // Attach the raw entry to each result
+  const entryMap = {};
+  for (const e of entries) entryMap[e.id] = e;
+
+  return results.map(r => ({
+    ...r,
+    entry: entryMap[r.docId],
+  })).filter(r => r.entry);
+}
+
 module.exports = {
   findProjectRoot, scanHomeForProjects, resolveProjectRoot,
   readJsonl, appendJsonl, tokenize,
@@ -368,4 +490,8 @@ module.exports = {
   findSimilarEntry,
   appendToolHistory, readToolHistory, clearToolHistory, detectAutoCapture, autoSaveCapture, extractCommandTags,
   TOOL_HISTORY_FILE,
+  // Exploration capture
+  ensureExplorationsDir, readExplorationsIndex, appendExplorationIndex,
+  extractFilePathsFromText, sanitizeFilename, extractTagsFromPrompt, searchExplorations,
+  EXPLORATIONS_DIR, EXPLORATIONS_INDEX,
 };

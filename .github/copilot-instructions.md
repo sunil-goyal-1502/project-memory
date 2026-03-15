@@ -5,6 +5,11 @@
 ## Architecture
 - Fork plugin by pointing installed_plugins.json to source repo instead of cache — Plugin cache is non-durable — edits get wiped on cache refresh. Source repo at <USER_HOME>\project-memory is version-controlled and durable.
 - Use ONNX MiniLM-L6 embeddings as primary search — no BM25 fallback — @huggingface/transformers is a hard dependency installed with the plugin. Embeddings are the only search mechanism.
+- Raw exploration output auto-captured to .ai-memory/explorations/ as verbatim markdown files with YAML frontmatter — User wants complete agent output preserved as-is for future sessions, not summaries or atomic facts. Graph-indexed for relevant retrieval.
+- Directory junction from plugin cache to source repo for permanent sync — CLAUDE_PLUGIN_ROOT resolves to cache copy regardless of installPath. Junction at cache/project-memory-marketplace/project-memory/1.0.0/ -> <USER_HOME>/project-memory makes all source edits instantly active in running hooks.
+
+## Testing
+- E2E tests should cover save, search, graph, and session-summary pipeline — Validates the full project-memory lifecycle in a single pass
 
 ---
 
@@ -20,9 +25,127 @@ grouping by category, and reproducing this exact format including this instructi
 
 ---
 
-## Research Findings Index (21 entries)
+## Research Findings Index (139 entries)
 | Topic | Tags | Staleness | Date |
 |-------|------|-----------|------|
+| graph.js extractTriplesFromEntry | graph, triples, relationships | stable | 2026-03-15 |
+| graph.js extractEntitiesFromText | graph, entities, extraction, regex | stable | 2026-03-15 |
+| Script: Check what node_modules exist in source | auto-capture, bash, script, discovery, node | stable | 2026-03-15 |
+| Script: Check what node_modules exist in cache | auto-capture, bash, script, discovery, node | stable | 2026-03-15 |
+| Script: Read marketplace.json from cache | auto-capture, bash, script, discovery, json | stable | 2026-03-15 |
+| Script: Read package.json to understand plugin structure | auto-capture, bash, script, discovery, find, json | stable | 2026-03-15 |
+| Script: List files in source project-memory directory | auto-capture, bash, script, discovery | stable | 2026-03-15 |
+| Script: Find plugin config files in cache | auto-capture, bash, script, discovery, find, json | stable | 2026-03-15 |
+| Script: Search for plugin registry files | auto-capture, bash, script, discovery, find | stable | 2026-03-15 |
+| Script: List all files in .claude directory | auto-capture, bash, script, discovery | stable | 2026-03-15 |
+| Script: Find all JSON files in plugins directory | auto-capture, bash, script, discovery, find, json | stable | 2026-03-15 |
+| graph.hookExpansionDepth default | config, graph, hooks | stable | 2026-03-15 |
+| Config.js module structure | config, settings, defaults | stable | 2026-03-15 |
+| Script: Check if other scripts also differ | auto-capture, bash, script, discovery, js | stable | 2026-03-15 |
+| Script: Check if shared.js also differs | auto-capture, bash, script, discovery, js | stable | 2026-03-15 |
+| Script: Create PR with linked work item | auto-capture, bash, script, discovery, node, git, curl, dotnet, pip | stable | 2026-03-15 |
+| Script: Create ADO work item with single quotes to preserve $Task | auto-capture, bash, script, discovery, curl | stable | 2026-03-15 |
+| Script: Create ADO work item with simpler area path | auto-capture, bash, script, discovery, curl | stable | 2026-03-15 |
+| Script: Create ADO work item | auto-capture, bash, script, discovery, node, curl | stable | 2026-03-15 |
+| Exploration capture test | test, exploration, hooks | stable | 2026-03-15 |
+| Script:  | auto-capture, bash, script, discovery, find | stable | 2026-03-15 |
+| Script: Check explorations index | auto-capture, bash, script, discovery | stable | 2026-03-15 |
+| Exploration retrieval: pre-tool-use searches explorations via BM25 + graph, injects as systemMessage | exploration, retrieval, pre-tool-use, search, injection | stable | 2026-03-15 |
+| Exploration capture pipeline: PostToolUse -> markdown file + JSONL index + graph triples + entity index | exploration, capture, pipeline, post-tool-use, graph | stable | 2026-03-15 |
+| PostToolUse hook tool_response field contains Task agent output | hooks, post-tool-use, tool-response, exploration-capture | stable | 2026-03-15 |
+| Script: Check which tools support both platforms | auto-capture, bash, script, discovery, grep, cs | stable | 2026-03-15 |
+| Framework fixes must be cross-platform: Android AND iOS | cross-platform, ios, android, appiumlocaltools, framework | stable | 2026-03-15 |
+| Script: Verify inputSchema escaping matches existing tools | auto-capture, bash, script, discovery, grep, cs | stable | 2026-03-15 |
+| Script: Read HandleResetApp exact code | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read HandleResetApp area for insertion point | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read full TestOrchestrator for precise editing | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read CloseApp and ResetApp tool definitions | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Find existing app lifecycle tools pattern | auto-capture, bash, script, discovery, grep, cs | stable | 2026-03-15 |
+| Script: Read session recovery call site | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read TryRecoverSessionAsync implementation | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read HandleResetApp and surrounding context | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read SubstrateLlmAssistedTestExecutionService.cs | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read TestOrchestrator.cs | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read IGUIInteractionService interface | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Find IGUIInteractionService interface | auto-capture, bash, script, discovery, grep, cs | stable | 2026-03-15 |
+| Script: Find TestStatus enum | auto-capture, bash, script, discovery, grep, cs | stable | 2026-03-15 |
+| Script: Read TestCase model | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read GuardRailResult model | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read TestFileResult model | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Build 46057316 session loss: emulator died mid-test, 4 recovery attempts failed | session-loss, emulator-crash, device-unavailable, build-46057316 | stable | 2026-03-15 |
+| Build 46057316 FRE blocking: ScanLaunch spent 50+ steps dismissing First Run Experience screens | fre, first-run-experience, scanlaunch, navigation-loops, build-46057316 | stable | 2026-03-15 |
+| Build 46057316 UI stuck pattern: Pages WebView consumed 66 steps with no DOM change | ui-stuck, webview, dom-change, state-recovery, build-46057316 | stable | 2026-03-15 |
+| Build 46057316 MSA Premium: incorrect password + MFA + already-signed-in across 4 attempts | msa-premium, sign-in, mfa, credentials, build-46057316 | stable | 2026-03-15 |
+| Build 46057316 sign-in failure: already-signed-in state persists across all 4 retries | sign-in, already-signed-in, stale-state, build-46057316, adalaisku | stable | 2026-03-15 |
+| Key architectural gap: LLM failure categories not propagated to orchestrator | architecture, failure-categories, llm, orchestrator, framework | stable | 2026-03-15 |
+| Framework fix priorities for Android AI test automation pipeline | framework-fixes, priorities, recommendations, android, build-analysis | stable | 2026-03-15 |
+| Build 46057316: 5 root cause categories across 20+ failed tests | build-46057316, test-failures, root-cause, android, daily-build | stable | 2026-03-15 |
+| System prompt has no MFA handling, no already-signed-in guidance | androidappiumsystemprompt, system-prompt, mfa, sign-in, framework | stable | 2026-03-15 |
+| SubstrateLlmAssistedTestExecutionService: maxSteps=100 is only backstop for stuck UI | substratellmassistedtestexecutionservice, execution-loop, maxsteps, framework | stable | 2026-03-15 |
+| Guard rails are mostly TODO stubs — only ActivateApp has real logic | guardrails, androidappiumtoolexecutionguardrails, framework | stable | 2026-03-15 |
+| Teardown does NOT clear app data between retries | appiumandroidtestteardown, teardown, app-data, framework | stable | 2026-03-15 |
+| TestOrchestrator retry logic: blind retries without failure category awareness | testorchestrator, retry, framework, build-analysis | stable | 2026-03-15 |
+| Script: Read teardown implementation | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read Android guard rails implementation | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read guard rails implementation | auto-capture, bash, script, discovery, find, cs | stable | 2026-03-15 |
+| Script: Read Android system prompt (first 400 lines) | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read LLM execution service source | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: Read TestOrchestrator source | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| TestCase retry count configuration | testcase, retrycount, mandatorytopass, testsetup | stable | 2026-03-15 |
+| Appium session recovery mechanism | session-recovery, session-health, appiumsessionmanager | stable | 2026-03-15 |
+| AppiumAndroidTestTearDown workflow | teardown, session-cleanup, app-termination | stable | 2026-03-15 |
+| Retry decision framework in prompt | retry-framework, contextual-intelligence, failure-patterns | stable | 2026-03-15 |
+| Android system dialog handling in prompt | system-dialog, app-not-responding, ui-stuck | stable | 2026-03-15 |
+| SubstrateLlmAssistedTestExecutionService execution loop | execution-loop, llm-guided, step-tracking | stable | 2026-03-15 |
+| Mandatory test failure stops execution | mandatory, mandatorytopass, execution-flow | stable | 2026-03-15 |
+| TestOrchestrator retry logic | retry, mandatory, test-execution, circuit-breaker | stable | 2026-03-15 |
+| Script:  | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script:  | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script:  | auto-capture, bash, script, discovery, grep, cs | stable | 2026-03-15 |
+| Script:  | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script:  | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script:  | auto-capture, bash, script, discovery, grep, cs | stable | 2026-03-15 |
+| Script:  | auto-capture, bash, script, discovery, cs | stable | 2026-03-15 |
+| Script: SignIn ADAL SKU retry attempts 2-4 detailed flow | auto-capture, bash, script, discovery, curl, grep | stable | 2026-03-15 |
+| Script: Parse MSA Premium full failure flow | auto-capture, bash, script, discovery, grep | stable | 2026-03-15 |
+| Script: Deep dive into MSA Premium sign-in failure flow | auto-capture, bash, script, discovery, curl, grep | stable | 2026-03-15 |
+| Script: Deep dive into SignIn already-signed-in failure flow | auto-capture, bash, script, discovery, curl, grep | stable | 2026-03-15 |
+| Script: Extract failure reasoning from all main test logs | auto-capture, bash, script, discovery, curl, grep | stable | 2026-03-15 |
+| Script: Extract test completion summaries from all bucket logs | auto-capture, bash, script, discovery, curl, grep | stable | 2026-03-15 |
+| Script: Fetch TestScenarios Bucket 2/5 test outcome details | auto-capture, bash, script, discovery, curl, grep | stable | 2026-03-15 |
+| Script: Fetch TestScenarios Bucket 5/5 test outcome details | auto-capture, bash, script, discovery, curl, grep | stable | 2026-03-15 |
+| Script: Fetch ADALAISKU Bucket 4/5 test outcome details | auto-capture, bash, script, discovery, curl, grep | stable | 2026-03-15 |
+| Script: Fetch Analyze Retry Results log for test outcome details | auto-capture, bash, script, discovery, curl, grep | stable | 2026-03-15 |
+| Script: Fetch Run UI Automation CLI log (MSAPREMIUM Bucket 1/1) | auto-capture, bash, script, discovery, curl | stable | 2026-03-15 |
+| Script: Fetch Run UI Automation CLI log (ADALAISKU Bucket 4/5) | auto-capture, bash, script, discovery, curl | stable | 2026-03-15 |
+| Script: Fetch Run UI Automation CLI log (ADALAISKU Bucket 2/5) for test details | auto-capture, bash, script, discovery, curl | stable | 2026-03-15 |
+| Script: Extract all failed records with error details and log IDs | auto-capture, bash, script, discovery, node, curl | stable | 2026-03-15 |
+| Script: Fetch test runs associated with this build | auto-capture, bash, script, discovery, node, curl | stable | 2026-03-15 |
+| Script: Fetch build timeline - all stages/jobs/tasks with pass/fail status | auto-capture, bash, script, discovery, node, curl | stable | 2026-03-15 |
+| Script: Fetch build details via ADO REST API | auto-capture, bash, script, discovery, node, curl, python | stable | 2026-03-15 |
+| Script: Check recent graph triples | auto-capture, bash, script, discovery | stable | 2026-03-15 |
+| E2E test: project-memory pipeline validation | e2e, test, validation | 30 | 2026-03-15 |
+| Script:  | auto-capture, bash, script, discovery, find, json | stable | 2026-03-13 |
+| Script:  | auto-capture, bash, script, discovery, find, js | stable | 2026-03-13 |
+| Script:  | auto-capture, bash, script, discovery | stable | 2026-03-13 |
+| Hybrid graph+embeddings architecture for code memory search | knowledge-graph, embeddings, graphrag, hybrid-search, architecture | stable | 2026-03-13 |
+| LevelGraph: lightweight embedded graph DB for Node.js | levelgraph, graph, knowledge-graph, leveldb, node | stable | 2026-03-13 |
+| GraphRAG entity and relationship extraction using LLMs | graphrag, entity-extraction, relationship-extraction, llm, knowledge-graph, ner, textunit, community-hierarchy, local-search, fastgraphrag, spacy, nltk | stable | 2026-03-13 |
+| Neo4j embedded and lightweight alternatives for Node.js | neo4j, embedded, node.js, graph-database, alternatives, titan, mongodb, cassandra, orientdb, janusgraph, sqlite | stable | 2026-03-13 |
+| Hybrid embeddings + graph structure for knowledge representation | embeddings, knowledge-graph, hybrid, gnn, graph-neural-networks, semantic-similarity, link-prediction, rag, complementary | stable | 2026-03-13 |
+| Knowledge graphs for code memory and dependency traversal | code-knowledge-graph, repository-code, ast-parsing, dependency-analysis, method-calls, inheritance, composition, graph-traversal, multi-hop-reasoning, code-generation | stable | 2026-03-13 |
+| RDF triple stores and semantic web in JavaScript | rdf, triplestore, semantic-web, javascript, rdflib, rdfstore-js, sparql, subject-predicate-object, linked-data | stable | 2026-03-13 |
+| SQLite graph database using adjacency lists and CTEs | sqlite, graph-database, adjacency-list, edge-table, common-table-expressions, cte, transitive-closure, sparse-graphs | stable | 2026-03-13 |
+| Relationship extraction from text using dependency parsing and GNNs | relationship-extraction, dependency-parsing, co-occurrence, graph-neural-networks, gnn, attention-mechanisms, edges, relations | stable | 2026-03-13 |
+| Entity extraction from text for knowledge graphs | entity-extraction, ner, named-entity-recognition, knowledge-graph, nlp, entity-types, person, organization, location | stable | 2026-03-13 |
+| Cayley: Open-source graph database inspired by Google Knowledge Graph | cayley, graph-database, rdf, linked-data, go, javascript-client, gizmo, mql, graphql, nquads, json-ld | stable | 2026-03-13 |
+| Gun.js: Decentralized offline-first graph database | gun, gundb, graph-database, decentralized, peer-to-peer, crdt, offline-first, real-time, javascript, node.js, browser | stable | 2026-03-13 |
+| Microsoft GraphRAG: Graph-based RAG combining text extraction, network analysis, LLM prompting | graphrag, microsoft, rag, retrieval-augmented-generation, local-implementation, ollama, gguf, open-ai-compatible | stable | 2026-03-13 |
+| TerminusDB: Open-source graph database with JSON document API | terminusdb, graph-database, document-store, json-ld, graphql, datalog, rdf, knowledge-graph, node.js-client | stable | 2026-03-13 |
+| LevelGraph: LevelDB-based graph database for Node.js | levelgraph, leveldb, graph-database, node.js, browser, hexastore, linked-data, json-ld, turtle, n3 | stable | 2026-03-13 |
+| HydraDB architecture and capabilities | hydradb, knowledge-graph, context-infrastructure, ai-memory, ultra-low-latency, relational-awareness | stable | 2026-03-13 |
+| Script: Check raw API response | auto-capture, bash, script, discovery, git, curl | stable | 2026-03-12 |
+| PostToolUse hook receives tool_result with stdout stderr exit_code | hooks, post-tool-use, tool-result, auto-capture | stable | 2026-03-06 |
 | Dashboard upgraded to global aggregation across all projects | dashboard, global, aggregation, multi-project | stable | 2026-03-05 |
 | Xenova/all-MiniLM-L6-v2 ONNX model availability | xenova, minilm, onnx, model, huggingface | --entities | 2026-03-05 |
 | Transformers.js feature-extraction pipeline for embeddings | feature-extraction, embeddings, pipeline, onnx, transformers.js | --entities | 2026-03-05 |

@@ -1,19 +1,19 @@
 {
-  "tokenCount": 102,
-  "lastSync": "2026-03-05T14:14:59.946Z",
+  "tokenCount": 270,
+  "lastSync": "2026-03-15T16:08:37.539Z",
   "sessionCount": 0,
-  "decisionCount": 2,
-  "researchCount": 21,
-  "researchTokenCount": 3272,
+  "decisionCount": 5,
+  "researchCount": 139,
+  "researchTokenCount": 16062,
   "stats": {
-    "totalTokensSaved": 70840,
-    "totalTimeSavedSeconds": 9119,
-    "totalHits": 385,
+    "totalTokensSaved": 298120,
+    "totalTimeSavedSeconds": 38104,
+    "totalHits": 1492,
     "eventCounts": {
-      "session_load_decision": 22,
-      "session_load_research": 231,
+      "session_load_decision": 52,
+      "session_load_research": 880,
       "research_search_hit": 0,
-      "memory_check_hit": 132,
+      "memory_check_hit": 560,
       "duplicate_save_avoided": 0
     }
   }

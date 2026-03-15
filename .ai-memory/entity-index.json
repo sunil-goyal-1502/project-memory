@@ -1,6 +1,8 @@
 {
   "shared.js": [
-    "f8708296"
+    "f8708296",
+    "exp_test0001",
+    "exp_06c07dbb"
   ],
   "findprojectroot": [
     "f8708296"
@@ -20,7 +22,8 @@
     "51bceca7"
   ],
   "save-research.js": [
-    "a3cb1a11"
+    "a3cb1a11",
+    "2e317e91"
   ],
   "entity-index.json": [
     "a3cb1a11"
@@ -32,7 +35,8 @@
     "a3cb1a11"
   ],
   "check-memory.js": [
-    "51bceca7"
+    "51bceca7",
+    "2e317e91"
   ],
   "keywordprefilter": [
     "51bceca7"
@@ -41,7 +45,12 @@
     "51bceca7"
   ],
   "post-tool-use.js": [
-    "dc0cd4f6"
+    "dc0cd4f6",
+    "9c32c90d",
+    "exp_test0001",
+    "exp_06c07dbb",
+    "9b69963c",
+    "ae60fb45"
   ],
   "logexplorationbreadcrumb": [
     "dc0cd4f6"
@@ -53,10 +62,13 @@
     "dc0cd4f6"
   ],
   "session-summary.js": [
-    "dc0cd4f6"
+    "dc0cd4f6",
+    "2e317e91"
   ],
   "session-start.js": [
-    "27846346"
+    "27846346",
+    "exp_test0001",
+    "exp_06c07dbb"
   ],
   "sync-tools.js": [
     "27846346"
@@ -69,5 +81,353 @@
   ],
   "discoverallprojects": [
     "6d9d898a"
+  ],
+  "tool_result": [
+    "9c32c90d"
+  ],
+  "hydradb": [
+    "dfc185a5"
+  ],
+  "levelgraph": [
+    "0113c2ba",
+    "61ca3ffc",
+    "c0564356"
+  ],
+  "terminusdb": [
+    "76625127"
+  ],
+  "graphrag": [
+    "c7d5ca4a",
+    "25244ba9",
+    "c0564356"
+  ],
+  "microsoft": [
+    "c7d5ca4a"
+  ],
+  "ollama": [
+    "c7d5ca4a"
+  ],
+  "gun": [
+    "6e36ccf8"
+  ],
+  "cayley": [
+    "54d08f0b"
+  ],
+  "google": [
+    "54d08f0b"
+  ],
+  "ner": [
+    "8688455c"
+  ],
+  "gnn": [
+    "74a7d40c",
+    "3ad32e57"
+  ],
+  "sqlite": [
+    "b7e9aba3",
+    "2a9787bb"
+  ],
+  "graphlite": [
+    "b7e9aba3"
+  ],
+  "rdf": [
+    "8de1e210"
+  ],
+  "sparql": [
+    "8de1e210"
+  ],
+  "rdflib.js": [
+    "8de1e210"
+  ],
+  "ast": [
+    "688a2c28"
+  ],
+  "code-graph": [
+    "688a2c28"
+  ],
+  "kg-embeddings": [
+    "3ad32e57"
+  ],
+  "neo4j": [
+    "2a9787bb"
+  ],
+  "llm": [
+    "25244ba9"
+  ],
+  "fastgraphrag": [
+    "25244ba9"
+  ],
+  "leveldb": [
+    "61ca3ffc"
+  ],
+  "minilm": [
+    "c0564356",
+    "exp_2e540f34"
+  ],
+  "domservice": [
+    "93d5eb83",
+    "exp_febd0ba8"
+  ],
+  "flaui": [
+    "93d5eb83",
+    "exp_febd0ba8"
+  ],
+  "graph.js": [
+    "2e317e91",
+    "exp_test0001",
+    "exp_06c07dbb",
+    "ae60fb45",
+    "exp_febd0ba8",
+    "exp_2eb6eb3c"
+  ],
+  "testorchestrator.cs": [
+    "0b3e837e",
+    "ba65b555",
+    "4a152bca",
+    "cbe6bc7a",
+    "6bbd6b87",
+    "be336c75"
+  ],
+  "executewithretriesasync": [
+    "0b3e837e",
+    "4a152bca"
+  ],
+  "retrycount": [
+    "0b3e837e",
+    "a80749cf"
+  ],
+  "mandatorytopass": [
+    "ba65b555"
+  ],
+  "substratellmassistedtestexecutionservice.cs": [
+    "5050c2fc",
+    "3cec088d",
+    "cbe6bc7a",
+    "6bbd6b87",
+    "be336c75"
+  ],
+  "invokeexecutionasync": [
+    "5050c2fc",
+    "3cec088d"
+  ],
+  "executionhistory": [
+    "5050c2fc"
+  ],
+  "androidappiumsystemprompt.cs": [
+    "7a526dce",
+    "de68d804",
+    "236911ac",
+    "cbe6bc7a",
+    "dac4d4bc"
+  ],
+  "system-prompt": [
+    "7a526dce"
+  ],
+  "error-handling": [
+    "7a526dce"
+  ],
+  "retry decision framework": [
+    "de68d804"
+  ],
+  "appiumandroidtestteardown.cs": [
+    "93721550",
+    "1c2ba1e1",
+    "6bbd6b87",
+    "681be636"
+  ],
+  "executeasync": [
+    "93721550"
+  ],
+  "apppackagenames": [
+    "93721550"
+  ],
+  "appiumsessionmanager.cs": [
+    "b6817045"
+  ],
+  "tryrecoversessionasync": [
+    "b6817045"
+  ],
+  "issessionhealthy": [
+    "b6817045"
+  ],
+  "forcecleanupdriver": [
+    "b6817045"
+  ],
+  "testcase.cs": [
+    "a80749cf"
+  ],
+  "updateproperties": [
+    "a80749cf"
+  ],
+  "closeappasync": [
+    "1c2ba1e1"
+  ],
+  "endsessionasync": [
+    "1c2ba1e1"
+  ],
+  "androidappiumtoolexecutionguardrails.cs": [
+    "29a16798",
+    "6bbd6b87"
+  ],
+  "applyguardrails": [
+    "29a16798"
+  ],
+  "guardrailresult": [
+    "29a16798"
+  ],
+  "getsystemprompt": [
+    "236911ac"
+  ],
+  "testfileresult": [
+    "be336c75"
+  ],
+  "01_tc_signin_adal_sku.md": [
+    "681be636"
+  ],
+  "01_tc_signin_msa_prem.md": [
+    "0ac1b5cf"
+  ],
+  "49_tc_libpagerecallweb_v2.md": [
+    "13a0098f"
+  ],
+  "59_tc_previewerfileopen_v2.md": [
+    "13a0098f"
+  ],
+  "14_tc_scanlaunch_v2.md": [
+    "670cd566"
+  ],
+  "59_tc_previewerpresentation_v2.md": [
+    "123a64ae"
+  ],
+  "appiumsessionmanager": [
+    "123a64ae"
+  ],
+  "appiumtoolhandler.cs": [
+    "dac4d4bc"
+  ],
+  "appiumlocaltoolsservice.cs": [
+    "dac4d4bc"
+  ],
+  "iosappiumsystemprompt.cs": [
+    "dac4d4bc"
+  ],
+  "sessionstart": [
+    "exp_test0001",
+    "exp_06c07dbb"
+  ],
+  "pretooluse": [
+    "exp_test0001",
+    "exp_06c07dbb"
+  ],
+  "posttooluse": [
+    "exp_test0001",
+    "exp_06c07dbb"
+  ],
+  "hooks.json": [
+    "exp_test0001"
+  ],
+  "pre-tool-use.js": [
+    "exp_test0001",
+    "exp_06c07dbb",
+    "15821f3e"
+  ],
+  "graph.jsonl": [
+    "exp_test0001"
+  ],
+  "node.js": [
+    "exp_06c07dbb"
+  ],
+  "session-stop.js": [
+    "exp_06c07dbb"
+  ],
+  "captureexploration": [
+    "9b69963c",
+    "ae60fb45"
+  ],
+  "explorations.jsonl": [
+    "ae60fb45",
+    "15821f3e"
+  ],
+  "searchexplorations": [
+    "15821f3e"
+  ],
+  "config.js": [
+    "exp_2e540f34",
+    "exp_f330a545"
+  ],
+  "config.json": [
+    "exp_2e540f34",
+    "exp_febd0ba8"
+  ],
+  "command": [
+    "exp_2e540f34"
+  ],
+  "hook": [
+    "exp_2e540f34",
+    "exp_f330a545"
+  ],
+  "readconfig": [
+    "exp_2e540f34"
+  ],
+  "writeconfig": [
+    "exp_2e540f34"
+  ],
+  "objects": [
+    "exp_2e540f34"
+  ],
+  "merged": [
+    "exp_2e540f34"
+  ],
+  "getdefault": [
+    "exp_2e540f34"
+  ],
+  "pascalcase": [
+    "exp_febd0ba8",
+    "exp_2eb6eb3c"
+  ],
+  "xpathdocument": [
+    "exp_febd0ba8"
+  ],
+  "flauitoolhandler": [
+    "exp_febd0ba8"
+  ],
+  "testrunner": [
+    "exp_febd0ba8"
+  ],
+  "getpagesourceasync": [
+    "exp_febd0ba8"
+  ],
+  "script.cs": [
+    "exp_febd0ba8"
+  ],
+  "answer": [
+    "exp_febd0ba8"
+  ],
+  "camelcase": [
+    "exp_febd0ba8"
+  ],
+  "segments": [
+    "exp_febd0ba8"
+  ],
+  "words": [
+    "exp_febd0ba8"
+  ],
+  "system.xml": [
+    "exp_febd0ba8"
+  ],
+  "git": [
+    "exp_febd0ba8"
+  ],
+  "npm": [
+    "exp_febd0ba8"
+  ],
+  "docker": [
+    "exp_febd0ba8"
+  ],
+  "az": [
+    "exp_febd0ba8"
+  ],
+  "entities": [
+    "exp_2eb6eb3c"
   ]
 }

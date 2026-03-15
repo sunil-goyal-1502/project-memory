@@ -15,7 +15,7 @@
 
 const fs = require("fs");
 const path = require("path");
-const { resolveProjectRoot, readJsonl, scanHomeForProjects, findProjectRoot } = require(path.join(__dirname, "shared.js"));
+const { resolveProjectRoot, readJsonl, readExplorationsIndex, scanHomeForProjects, findProjectRoot } = require(path.join(__dirname, "shared.js"));
 const { generateEmbedding, readEmbeddings, writeEmbeddings } = require(path.join(__dirname, "embeddings.js"));
 
 const G = "\x1b[92m";
@@ -53,7 +53,16 @@ async function buildForProject(projectRoot) {
 
   const research = readJsonl(path.join(memDir, "research.jsonl"));
   const decisions = readJsonl(path.join(memDir, "decisions.jsonl"));
-  const allEntries = [...research, ...decisions];
+
+  // Include exploration index entries (query + entities + tags as embeddable text)
+  const explorations = readExplorationsIndex(projectRoot).map(e => ({
+    id: e.id,
+    topic: e.query || "",
+    tags: e.tags || [],
+    finding: [e.query || "", (e.files || []).join(" "), (e.entities || []).join(" ")].join(" "),
+  }));
+
+  const allEntries = [...research, ...decisions, ...explorations];
 
   if (allEntries.length === 0) return 0;
 
