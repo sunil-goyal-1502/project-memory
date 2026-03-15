@@ -337,15 +337,18 @@ function getRelevantFindings(projectRoot, input) {
     const researchMap = {};
     for (const r of research) researchMap[r.id] = r;
 
-    const lines = [`${G}${B}★ Relevant Memory Found ────────────────────────${R}`];
-    lines.push(`${G}  These saved findings may help — USE them instead of re-investigating:${R}`);
+    const C2 = "\x1b[96m"; // cyan
+    const lines = [`${C2}${B}★ Relevant Memory Found ────────────────────────${R}`];
+    lines.push(`${C2}  ${relevant.length} saved finding(s) may help:${R}`);
+    lines.push(``);
     for (const { docId, score } of relevant) {
       const entry = researchMap[docId];
       if (!entry) continue;
-      lines.push(`${G}  • ${entry.topic || "untitled"} (relevance: ${score.toFixed(1)})${R}`);
-      lines.push(`${G}    ${(entry.finding || "").slice(0, 150)}${R}`);
+      lines.push(`${G}${B}  • ${entry.topic || "untitled"}${R}`);
+      lines.push(`${G}    ${entry.finding || ""}${R}`);
+      lines.push(``);
     }
-    lines.push(`${G}${B}────────────────────────────────────────────────${R}`);
+    lines.push(`${C2}${B}────────────────────────────────────────────────${R}`);
 
     debugLog(projectRoot, `AUTO-INJECT: ${relevant.length} findings for "${query.slice(0, 60)}"`);
     return lines.join("\n");
@@ -376,7 +379,7 @@ function recordToolCallAndAutoCapture(projectRoot, input) {
     const record = {
       tool: input.tool_name,
       command: toolInput.command || "",
-      description: (toolInput.description || "").slice(0, 200),
+      description: toolInput.description || "",
       exitCode,
       success,
       exploratory: input.tool_name === "Bash" ? isExploratoryBash(input) : isExploratoryTask(input),

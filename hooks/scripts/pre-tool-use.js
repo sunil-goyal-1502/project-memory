@@ -462,20 +462,28 @@ function main() {
               return overlap >= 2; // 2+ significant words overlap = same topic
             });
 
-            const G = "\x1b[92m";
+            const G = "\x1b[92m"; // green
+            const C2 = "\x1b[96m"; // cyan
+            const Y = "\x1b[93m"; // yellow
+            const D = "\x1b[2m"; // dim
             const lines = [];
-            lines.push(`${G}${B}★ Memory Cache Hit ─────────────────────────────${R}`);
-            lines.push(`${G}  Found ${relevant.length} relevant saved findings:${R}`);
+            lines.push(`${C2}${B}★ Memory Cache Hit ─────────────────────────────${R}`);
+            lines.push(`${C2}  ${relevant.length} saved finding(s) match your current task:${R}`);
             lines.push(``);
-            for (const { docId, score } of relevant) {
+            for (let ri = 0; ri < relevant.length; ri++) {
+              const { docId, score } = relevant[ri];
               const entry = researchMap[docId];
               if (!entry) continue;
-              lines.push(`${G}  ► ${entry.topic || "untitled"} (score: ${score.toFixed(1)})${R}`);
-              lines.push(`${G}    ${entry.finding || ""}${R}`);
+              const isGraphExpanded = score < 0.5;
+              const sourceTag = isGraphExpanded ? ` ${D}[via graph]${R}` : "";
+              const tags = (entry.tags || []).slice(0, 4).join(", ");
+              lines.push(`${G}${B}  ${ri + 1}. ${entry.topic || "untitled"}${R}${sourceTag}`);
+              if (tags) lines.push(`${D}     Tags: ${tags}${R}`);
+              lines.push(`${G}     ${entry.finding || ""}${R}`);
               lines.push(``);
             }
-            lines.push(`${G}${B}  IMPORTANT: Copy and adapt the commands above instead of writing new scripts.${R}`);
-            lines.push(`${G}${B}─────────────────────────────────────────────────${R}`);
+            lines.push(`${Y}${B}  ▶ USE the scripts/findings above directly. Only re-explore if they are genuinely insufficient.${R}`);
+            lines.push(`${C2}${B}─────────────────────────────────────────────────${R}`);
 
             // Log this cache hit
             try {
