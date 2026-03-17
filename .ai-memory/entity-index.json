@@ -2,41 +2,86 @@
   "shared.js": [
     "f8708296",
     "exp_test0001",
-    "exp_06c07dbb"
+    "exp_06c07dbb",
+    "exp_7d0e8596",
+    "exp_8f98c755",
+    "exp_f0a73b16",
+    "exp_303353c4",
+    "d644920f",
+    "5e6bee3a",
+    "ba0117a4",
+    "exp_5fe008fb",
+    "945f179a",
+    "c05096fc",
+    "2c6fe5e5",
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "25f95536",
+    "b6087ad5",
+    "03770d4b",
+    "a4f8f8d0",
+    "exp_c7398b76"
   ],
   "findprojectroot": [
-    "f8708296"
+    "f8708296",
+    "exp_f0a73b16"
   ],
   "readjsonl": [
-    "f8708296"
+    "f8708296",
+    "c05096fc",
+    "exp_d7f0cfb3"
   ],
   "tokenize": [
     "f8708296"
   ],
   "buildbm25index": [
     "f8708296",
-    "51bceca7"
+    "51bceca7",
+    "c05096fc",
+    "2c6fe5e5"
   ],
   "bm25score": [
     "f8708296",
-    "51bceca7"
+    "51bceca7",
+    "2c6fe5e5"
   ],
   "save-research.js": [
     "a3cb1a11",
-    "2e317e91"
+    "2e317e91",
+    "exp_f0a73b16",
+    "exp_ab1e3a0f",
+    "be68584e",
+    "exp_303353c4",
+    "a4f8f8d0",
+    "exp_c7398b76"
   ],
   "entity-index.json": [
-    "a3cb1a11"
+    "a3cb1a11",
+    "exp_d7f0cfb3",
+    "exp_c7398b76"
   ],
   "findsimilarentry": [
-    "a3cb1a11"
+    "a3cb1a11",
+    "exp_f0a73b16"
   ],
   "addtoentityindex": [
-    "a3cb1a11"
+    "a3cb1a11",
+    "exp_d7f0cfb3"
   ],
   "check-memory.js": [
     "51bceca7",
-    "2e317e91"
+    "2e317e91",
+    "exp_7d0e8596",
+    "exp_8f98c755",
+    "exp_f0a73b16",
+    "exp_ab1e3a0f",
+    "exp_303353c4",
+    "exp_5fe008fb",
+    "ada49495",
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "25f95536",
+    "a4f8f8d0"
   ],
   "keywordprefilter": [
     "51bceca7"
@@ -50,7 +95,24 @@
     "exp_test0001",
     "exp_06c07dbb",
     "9b69963c",
-    "ae60fb45"
+    "ae60fb45",
+    "exp_6b396a56",
+    "exp_8f98c755",
+    "exp_f0a73b16",
+    "exp_303353c4",
+    "5e6bee3a",
+    "exp_5fe008fb",
+    "945f179a",
+    "c05096fc",
+    "f50fc387",
+    "a343bf8a",
+    "exp_d7f0cfb3",
+    "25f95536",
+    "b6087ad5",
+    "03770d4b",
+    "exp_c7398b76",
+    "0162db3b",
+    "19ab5bd7"
   ],
   "logexplorationbreadcrumb": [
     "dc0cd4f6"
@@ -63,21 +125,52 @@
   ],
   "session-summary.js": [
     "dc0cd4f6",
-    "2e317e91"
+    "2e317e91",
+    "exp_f0a73b16",
+    "exp_5fe008fb",
+    "exp_c7398b76"
   ],
   "session-start.js": [
     "27846346",
     "exp_test0001",
-    "exp_06c07dbb"
+    "exp_06c07dbb",
+    "exp_6b396a56",
+    "exp_8f98c755",
+    "exp_f0a73b16",
+    "exp_ab1e3a0f",
+    "exp_303353c4",
+    "exp_5fe008fb",
+    "945f179a",
+    "a343bf8a",
+    "exp_d7f0cfb3",
+    "25f95536",
+    "b6087ad5",
+    "03770d4b",
+    "exp_c7398b76",
+    "0162db3b"
   ],
   "sync-tools.js": [
-    "27846346"
+    "27846346",
+    "exp_f0a73b16",
+    "exp_ab1e3a0f",
+    "be68584e",
+    "exp_303353c4",
+    "exp_19ad578e",
+    "03770d4b"
   ],
   "dashboard.js": [
-    "6d9d898a"
+    "6d9d898a",
+    "exp_f0a73b16",
+    "exp_c7398b76"
   ],
   "build-embeddings.js": [
-    "6d9d898a"
+    "6d9d898a",
+    "exp_f0a73b16",
+    "exp_303353c4",
+    "exp_5fe008fb",
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "exp_c7398b76"
   ],
   "discoverallprojects": [
     "6d9d898a"
@@ -162,7 +255,10 @@
   ],
   "minilm": [
     "c0564356",
-    "exp_2e540f34"
+    "exp_2e540f34",
+    "exp_f0a73b16",
+    "exp_d7f0cfb3",
+    "exp_19ad578e"
   ],
   "domservice": [
     "93d5eb83",
@@ -170,7 +266,8 @@
   ],
   "flaui": [
     "93d5eb83",
-    "exp_febd0ba8"
+    "exp_febd0ba8",
+    "exp_19ad578e"
   ],
   "graph.js": [
     "2e317e91",
@@ -178,7 +275,13 @@
     "exp_06c07dbb",
     "ae60fb45",
     "exp_febd0ba8",
-    "exp_2eb6eb3c"
+    "exp_2eb6eb3c",
+    "exp_7d0e8596",
+    "exp_5fe008fb",
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "03770d4b",
+    "a4f8f8d0"
   ],
   "testorchestrator.cs": [
     "0b3e837e",
@@ -204,7 +307,9 @@
     "3cec088d",
     "cbe6bc7a",
     "6bbd6b87",
-    "be336c75"
+    "be336c75",
+    "6ad9c5ee",
+    "c1105676"
   ],
   "invokeexecutionasync": [
     "5050c2fc",
@@ -218,7 +323,8 @@
     "de68d804",
     "236911ac",
     "cbe6bc7a",
-    "dac4d4bc"
+    "dac4d4bc",
+    "9b8dcef4"
   ],
   "system-prompt": [
     "7a526dce"
@@ -233,7 +339,9 @@
     "93721550",
     "1c2ba1e1",
     "6bbd6b87",
-    "681be636"
+    "681be636",
+    "9b8dcef4",
+    "6ad9c5ee"
   ],
   "executeasync": [
     "93721550"
@@ -267,7 +375,8 @@
   ],
   "androidappiumtoolexecutionguardrails.cs": [
     "29a16798",
-    "6bbd6b87"
+    "6bbd6b87",
+    "6ad9c5ee"
   ],
   "applyguardrails": [
     "29a16798"
@@ -303,71 +412,120 @@
     "123a64ae"
   ],
   "appiumtoolhandler.cs": [
-    "dac4d4bc"
+    "dac4d4bc",
+    "6ad9c5ee"
   ],
   "appiumlocaltoolsservice.cs": [
-    "dac4d4bc"
+    "dac4d4bc",
+    "9b8dcef4"
   ],
   "iosappiumsystemprompt.cs": [
     "dac4d4bc"
   ],
   "sessionstart": [
     "exp_test0001",
-    "exp_06c07dbb"
+    "exp_06c07dbb",
+    "exp_8f98c755"
   ],
   "pretooluse": [
     "exp_test0001",
-    "exp_06c07dbb"
+    "exp_06c07dbb",
+    "exp_5fe008fb",
+    "exp_c7398b76"
   ],
   "posttooluse": [
     "exp_test0001",
-    "exp_06c07dbb"
+    "exp_06c07dbb",
+    "exp_5fe008fb"
   ],
   "hooks.json": [
-    "exp_test0001"
+    "exp_test0001",
+    "exp_8f98c755"
   ],
   "pre-tool-use.js": [
     "exp_test0001",
     "exp_06c07dbb",
-    "15821f3e"
+    "15821f3e",
+    "exp_6b396a56",
+    "exp_8f98c755",
+    "exp_f0a73b16",
+    "exp_303353c4",
+    "5e6bee3a",
+    "exp_5fe008fb",
+    "945f179a",
+    "c05096fc",
+    "f50fc387",
+    "2c6fe5e5",
+    "ada49495",
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "25f95536",
+    "b6087ad5",
+    "03770d4b",
+    "exp_c7398b76",
+    "0162db3b",
+    "19ab5bd7"
   ],
   "graph.jsonl": [
-    "exp_test0001"
+    "exp_test0001",
+    "exp_303353c4",
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "exp_c7398b76"
   ],
   "node.js": [
-    "exp_06c07dbb"
+    "exp_06c07dbb",
+    "exp_d7f0cfb3",
+    "exp_c7398b76"
   ],
   "session-stop.js": [
-    "exp_06c07dbb"
+    "exp_06c07dbb",
+    "exp_5fe008fb"
   ],
   "captureexploration": [
     "9b69963c",
-    "ae60fb45"
+    "ae60fb45",
+    "exp_d7f0cfb3"
   ],
   "explorations.jsonl": [
     "ae60fb45",
-    "15821f3e"
+    "15821f3e",
+    "exp_f0a73b16",
+    "exp_5fe008fb",
+    "exp_d7f0cfb3",
+    "exp_c7398b76"
   ],
   "searchexplorations": [
-    "15821f3e"
+    "15821f3e",
+    "exp_f0a73b16"
   ],
   "config.js": [
     "exp_2e540f34",
-    "exp_f330a545"
+    "exp_f330a545",
+    "exp_303353c4",
+    "exp_d7f0cfb3",
+    "exp_19ad578e"
   ],
   "config.json": [
     "exp_2e540f34",
-    "exp_febd0ba8"
+    "exp_febd0ba8",
+    "exp_19ad578e",
+    "exp_c7398b76"
   ],
   "command": [
-    "exp_2e540f34"
+    "exp_2e540f34",
+    "exp_f0a73b16"
   ],
   "hook": [
     "exp_2e540f34",
-    "exp_f330a545"
+    "exp_f330a545",
+    "exp_8f98c755",
+    "exp_f0a73b16",
+    "exp_d7f0cfb3"
   ],
   "readconfig": [
-    "exp_2e540f34"
+    "exp_2e540f34",
+    "exp_d7f0cfb3"
   ],
   "writeconfig": [
     "exp_2e540f34"
@@ -383,7 +541,9 @@
   ],
   "pascalcase": [
     "exp_febd0ba8",
-    "exp_2eb6eb3c"
+    "exp_2eb6eb3c",
+    "exp_7d0e8596",
+    "exp_5fe008fb"
   ],
   "xpathdocument": [
     "exp_febd0ba8"
@@ -410,13 +570,16 @@
     "exp_febd0ba8"
   ],
   "words": [
-    "exp_febd0ba8"
+    "exp_febd0ba8",
+    "exp_f0a73b16",
+    "exp_19ad578e"
   ],
   "system.xml": [
     "exp_febd0ba8"
   ],
   "git": [
-    "exp_febd0ba8"
+    "exp_febd0ba8",
+    "exp_8f98c755"
   ],
   "npm": [
     "exp_febd0ba8"
@@ -428,6 +591,714 @@
     "exp_febd0ba8"
   ],
   "entities": [
-    "exp_2eb6eb3c"
+    "exp_2eb6eb3c",
+    "exp_19ad578e"
+  ],
+  "appdata": [
+    "exp_f2a668db",
+    "exp_6b396a56",
+    "exp_7d0e8596"
+  ],
+  "research.jsonl": [
+    "exp_f2a668db",
+    "exp_8f98c755",
+    "exp_f0a73b16",
+    "exp_ab1e3a0f",
+    "exp_303353c4",
+    "exp_5fe008fb",
+    "2c6fe5e5",
+    "b9635b86",
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "exp_c7398b76"
+  ],
+  "entries": [
+    "exp_f2a668db",
+    "exp_ab1e3a0f",
+    "exp_303353c4",
+    "exp_19ad578e"
+  ],
+  "noise": [
+    "exp_f2a668db"
+  ],
+  "bash": [
+    "exp_f2a668db",
+    "exp_8f98c755",
+    "exp_ab1e3a0f"
+  ],
+  "websearch": [
+    "exp_6b396a56",
+    "exp_f0a73b16",
+    "exp_5fe008fb",
+    "exp_c7398b76"
+  ],
+  "webfetch": [
+    "exp_6b396a56",
+    "exp_f0a73b16",
+    "exp_5fe008fb",
+    "exp_c7398b76"
+  ],
+  "dedup": [
+    "exp_6b396a56"
+  ],
+  "claude.md": [
+    "exp_8f98c755",
+    "exp_f0a73b16",
+    "exp_ab1e3a0f",
+    "exp_303353c4",
+    "exp_5fe008fb",
+    "exp_d7f0cfb3",
+    "exp_19ad578e"
+  ],
+  "memory": [
+    "exp_8f98c755",
+    "exp_19ad578e"
+  ],
+  "points": [
+    "exp_8f98c755"
+  ],
+  "working": [
+    "exp_8f98c755"
+  ],
+  "lines": [
+    "exp_8f98c755",
+    "exp_5fe008fb"
+  ],
+  "sync": [
+    "exp_8f98c755"
+  ],
+  "correct": [
+    "exp_8f98c755"
+  ],
+  "functioning": [
+    "exp_8f98c755"
+  ],
+  "handleclearappdata": [
+    "3fbe9977"
+  ],
+  "appiumtoolhandler": [
+    "3fbe9977",
+    "exp_19ad578e"
+  ],
+  "clearappdataasync": [
+    "3fbe9977"
+  ],
+  "appiumandroidtestteardown": [
+    "f5469b11"
+  ],
+  "substratellmassistedtestexecutionservice": [
+    "f5469b11"
+  ],
+  "scripts.jsonl": [
+    "exp_f0a73b16",
+    "exp_303353c4",
+    "d644920f",
+    "exp_5fe008fb",
+    "exp_19ad578e",
+    "exp_c7398b76"
+  ],
+  "intent-classifier.js": [
+    "exp_f0a73b16",
+    "exp_c7398b76"
+  ],
+  "installed_plugins.json": [
+    "exp_f0a73b16"
+  ],
+  "r.ts": [
+    "exp_f0a73b16",
+    "exp_ab1e3a0f"
+  ],
+  "metadata.json": [
+    "exp_f0a73b16",
+    "exp_19ad578e"
+  ],
+  "detectautocapture": [
+    "exp_f0a73b16",
+    "exp_303353c4"
+  ],
+  "autosavecapture": [
+    "exp_f0a73b16",
+    "exp_303353c4"
+  ],
+  "jsonl": [
+    "exp_f0a73b16",
+    "exp_d7f0cfb3",
+    "exp_c7398b76"
+  ],
+  "logic": [
+    "exp_f0a73b16"
+  ],
+  "extractcommandtags": [
+    "exp_f0a73b16"
+  ],
+  "names": [
+    "exp_f0a73b16"
+  ],
+  "extensions": [
+    "exp_f0a73b16"
+  ],
+  "captures": [
+    "exp_f0a73b16"
+  ],
+  "through": [
+    "exp_f0a73b16"
+  ],
+  "injection": [
+    "exp_f0a73b16"
+  ],
+  "join": [
+    "exp_f0a73b16",
+    "exp_ab1e3a0f"
+  ],
+  "filter": [
+    "exp_f0a73b16"
+  ],
+  "slice": [
+    "exp_f0a73b16"
+  ],
+  "expandfromentities": [
+    "exp_f0a73b16"
+  ],
+  "write": [
+    "exp_f0a73b16",
+    "exp_5fe008fb"
+  ],
+  "stringify": [
+    "exp_f0a73b16",
+    "exp_5fe008fb"
+  ],
+  "findings": [
+    "exp_f0a73b16",
+    "exp_303353c4",
+    "exp_5fe008fb",
+    "exp_c7398b76"
+  ],
+  "semanticsearch": [
+    "exp_f0a73b16"
+  ],
+  "embeddings": [
+    "exp_f0a73b16",
+    "ada49495",
+    "exp_19ad578e"
+  ],
+  "similarity": [
+    "exp_f0a73b16"
+  ],
+  "scanhomeforprojects": [
+    "exp_f0a73b16"
+  ],
+  "processes": [
+    "exp_f0a73b16",
+    "exp_d7f0cfb3"
+  ],
+  "appendfilesync": [
+    "exp_f0a73b16",
+    "exp_5fe008fb"
+  ],
+  "save-decision.js": [
+    "exp_ab1e3a0f",
+    "exp_c7398b76"
+  ],
+  "decisions.jsonl": [
+    "exp_ab1e3a0f",
+    "exp_303353c4",
+    "exp_5fe008fb",
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "exp_c7398b76"
+  ],
+  "b.ts": [
+    "exp_ab1e3a0f"
+  ],
+  "a.ts": [
+    "exp_ab1e3a0f"
+  ],
+  "nsave-research.js": [
+    "exp_ab1e3a0f"
+  ],
+  "updateclaudemd": [
+    "exp_ab1e3a0f",
+    "be68584e",
+    "exp_303353c4"
+  ],
+  "syncall": [
+    "exp_ab1e3a0f"
+  ],
+  "directly": [
+    "exp_ab1e3a0f"
+  ],
+  "formatresearchfindingslist": [
+    "exp_ab1e3a0f",
+    "be68584e",
+    "exp_303353c4"
+  ],
+  "toisostring": [
+    "exp_ab1e3a0f"
+  ],
+  "push": [
+    "exp_ab1e3a0f",
+    "exp_303353c4",
+    "exp_5fe008fb"
+  ],
+  "sort": [
+    "exp_ab1e3a0f"
+  ],
+  "localecompare": [
+    "exp_ab1e3a0f"
+  ],
+  "state": [
+    "exp_ab1e3a0f"
+  ],
+  "text": [
+    "exp_ab1e3a0f"
+  ],
+  "loaded": [
+    "exp_ab1e3a0f",
+    "exp_5fe008fb"
+  ],
+  "appendjsonl": [
+    "exp_ab1e3a0f"
+  ],
+  "readresearch": [
+    "exp_ab1e3a0f"
+  ],
+  "generateclauderesearchsection": [
+    "exp_ab1e3a0f"
+  ],
+  "node": [
+    "exp_ab1e3a0f"
+  ],
+  "powershell": [
+    "exp_ab1e3a0f"
+  ],
+  "devops": [
+    "exp_303353c4"
+  ],
+  "save-script.js": [
+    "exp_303353c4",
+    "d644920f"
+  ],
+  "migrate-scripts.js": [
+    "exp_303353c4",
+    "d644920f"
+  ],
+  "embeddings.json": [
+    "exp_303353c4",
+    "exp_5fe008fb",
+    "exp_d7f0cfb3",
+    "exp_19ad578e"
+  ],
+  "entry.ts": [
+    "exp_303353c4"
+  ],
+  "values": [
+    "exp_303353c4"
+  ],
+  "functions": [
+    "exp_303353c4"
+  ],
+  "outputs": [
+    "exp_303353c4"
+  ],
+  "recordtoolcallandautocapture": [
+    "exp_303353c4",
+    "exp_d7f0cfb3"
+  ],
+  "search": [
+    "exp_303353c4"
+  ],
+  "template": [
+    "exp_303353c4"
+  ],
+  "variable": [
+    "exp_303353c4"
+  ],
+  "structure": [
+    "exp_303353c4"
+  ],
+  "strings": [
+    "exp_303353c4"
+  ],
+  "retrieval": [
+    "exp_303353c4"
+  ],
+  "match": [
+    "exp_303353c4"
+  ],
+  "templates": [
+    "exp_303353c4"
+  ],
+  "index": [
+    "exp_303353c4"
+  ],
+  "save": [
+    "exp_303353c4"
+  ],
+  "helpers": [
+    "exp_303353c4"
+  ],
+  "parameterizecommand": [
+    "exp_303353c4",
+    "d644920f"
+  ],
+  "addparam": [
+    "exp_303353c4"
+  ],
+  "some": [
+    "exp_303353c4"
+  ],
+  "replace": [
+    "exp_303353c4"
+  ],
+  "substring": [
+    "exp_303353c4"
+  ],
+  "test": [
+    "exp_303353c4"
+  ],
+  "paths": [
+    "exp_303353c4"
+  ],
+  "includes": [
+    "exp_303353c4"
+  ],
+  "normalizetemplate": [
+    "exp_303353c4"
+  ],
+  "itestteardown": [
+    "9b8dcef4"
+  ],
+  "isreusablescript": [
+    "ba0117a4"
+  ],
+  "autosavescript": [
+    "ba0117a4"
+  ],
+  "testcasestepnumber": [
+    "c1105676"
+  ],
+  "taskcreate": [
+    "exp_5fe008fb",
+    "exp_d7f0cfb3",
+    "exp_c7398b76"
+  ],
+  "taskupdate": [
+    "exp_5fe008fb",
+    "exp_d7f0cfb3",
+    "exp_c7398b76"
+  ],
+  "localtools": [
+    "exp_5fe008fb"
+  ],
+  "localtool": [
+    "exp_5fe008fb"
+  ],
+  "parsed.ts": [
+    "exp_5fe008fb"
+  ],
+  "loop": [
+    "exp_5fe008fb"
+  ],
+  "isexploratorybash": [
+    "exp_5fe008fb",
+    "f50fc387",
+    "exp_d7f0cfb3"
+  ],
+  "isexploratorytask": [
+    "exp_5fe008fb",
+    "f50fc387",
+    "exp_d7f0cfb3"
+  ],
+  "corrupted": [
+    "exp_5fe008fb"
+  ],
+  "itself": [
+    "exp_5fe008fb"
+  ],
+  "processing": [
+    "exp_5fe008fb"
+  ],
+  "reminders": [
+    "exp_5fe008fb"
+  ],
+  "operational": [
+    "exp_5fe008fb"
+  ],
+  "exploratory": [
+    "exp_5fe008fb",
+    "exp_c7398b76"
+  ],
+  "readfilesync": [
+    "exp_5fe008fb",
+    "exp_d7f0cfb3"
+  ],
+  "filesystem": [
+    "exp_5fe008fb"
+  ],
+  "addtriples": [
+    "exp_5fe008fb"
+  ],
+  "throws": [
+    "exp_5fe008fb"
+  ],
+  "written": [
+    "exp_5fe008fb"
+  ],
+  "banner": [
+    "exp_5fe008fb"
+  ],
+  "summary": [
+    "exp_5fe008fb"
+  ],
+  "instruction": [
+    "exp_5fe008fb"
+  ],
+  "reminder": [
+    "exp_5fe008fb"
+  ],
+  "bm25": [
+    "c05096fc",
+    "ada49495"
+  ],
+  "exploration_keywords": [
+    "f50fc387"
+  ],
+  "operational_keywords": [
+    "f50fc387"
+  ],
+  ".last-reminder": [
+    "a343bf8a"
+  ],
+  ".task-tracker": [
+    "a343bf8a"
+  ],
+  ".exploration-log": [
+    "a343bf8a"
+  ],
+  ".tool-history": [
+    "a343bf8a"
+  ],
+  ".cache-hits": [
+    "a343bf8a"
+  ],
+  "searchmode": [
+    "ada49495"
+  ],
+  "architecture": [
+    "b9635b86",
+    "exp_d7f0cfb3"
+  ],
+  "features": [
+    "b9635b86"
+  ],
+  "usability": [
+    "b9635b86"
+  ],
+  "explorations": [
+    "b9635b86"
+  ],
+  "embeddings.js": [
+    "exp_d7f0cfb3",
+    "exp_19ad578e"
+  ],
+  "stats.js": [
+    "exp_d7f0cfb3"
+  ],
+  "intent-embeddings.json": [
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "exp_c7398b76"
+  ],
+  "session-state.json": [
+    "exp_d7f0cfb3",
+    "exp_19ad578e",
+    "exp_c7398b76"
+  ],
+  "reads": [
+    "exp_d7f0cfb3"
+  ],
+  "files": [
+    "exp_d7f0cfb3",
+    "exp_19ad578e"
+  ],
+  "strategy": [
+    "exp_d7f0cfb3"
+  ],
+  "graphs": [
+    "exp_d7f0cfb3"
+  ],
+  "isolation": [
+    "exp_d7f0cfb3"
+  ],
+  "writefilesync": [
+    "exp_d7f0cfb3"
+  ],
+  "appendexplorationindex": [
+    "exp_d7f0cfb3"
+  ],
+  "capture": [
+    "exp_d7f0cfb3"
+  ],
+  "hits": [
+    "exp_d7f0cfb3"
+  ],
+  "tracker": [
+    "exp_d7f0cfb3"
+  ],
+  "classifier": [
+    "exp_d7f0cfb3"
+  ],
+  "readstate": [
+    "exp_d7f0cfb3"
+  ],
+  "writestate": [
+    "exp_d7f0cfb3"
+  ],
+  "getlastsavets": [
+    "exp_d7f0cfb3"
+  ],
+  "flow": [
+    "exp_d7f0cfb3"
+  ],
+  "archive-finding.js": [
+    "exp_19ad578e"
+  ],
+  "adobuild-api-call.sh": [
+    "exp_19ad578e"
+  ],
+  "script-templates.jsonl": [
+    "exp_19ad578e"
+  ],
+  "archived-research.jsonl": [
+    "exp_19ad578e"
+  ],
+  "queries": [
+    "exp_19ad578e"
+  ],
+  "atomic": [
+    "exp_19ad578e"
+  ],
+  "call": [
+    "exp_19ad578e"
+  ],
+  "results": [
+    "exp_19ad578e",
+    "exp_c7398b76"
+  ],
+  "hooks": [
+    "exp_19ad578e"
+  ],
+  "everywhere": [
+    "exp_19ad578e"
+  ],
+  "threshold": [
+    "exp_19ad578e"
+  ],
+  "research": [
+    "exp_19ad578e"
+  ],
+  "surfaces": [
+    "exp_19ad578e"
+  ],
+  "baseline": [
+    "exp_19ad578e"
+  ],
+  "connections": [
+    "exp_19ad578e"
+  ],
+  "expensive": [
+    "exp_19ad578e"
+  ],
+  "finding": [
+    "exp_19ad578e"
+  ],
+  "prefix": [
+    "exp_19ad578e"
+  ],
+  "aggressive": [
+    "exp_19ad578e"
+  ],
+  "rate": [
+    "exp_19ad578e"
+  ],
+  "budget": [
+    "exp_19ad578e"
+  ],
+  "scripts": [
+    "exp_19ad578e"
+  ],
+  "normalized": [
+    "exp_19ad578e"
+  ],
+  "test-e2e.js": [
+    "a4f8f8d0"
+  ],
+  "undo-save.js": [
+    "a4f8f8d0"
+  ],
+  "bm25-cache.json": [
+    "exp_c7398b76"
+  ],
+  "timestamp_slug_hash.md": [
+    "exp_c7398b76"
+  ],
+  "graph-adj-cache.json": [
+    "exp_c7398b76"
+  ],
+  "daemon.js": [
+    "exp_c7398b76",
+    "0162db3b",
+    "19ab5bd7"
+  ],
+  "managed": [
+    "exp_c7398b76"
+  ],
+  "createserver": [
+    "exp_c7398b76"
+  ],
+  "listen": [
+    "exp_c7398b76"
+  ],
+  "json": [
+    "exp_c7398b76"
+  ],
+  "adjacency": [
+    "exp_c7398b76"
+  ],
+  "decisions": [
+    "exp_c7398b76"
+  ],
+  "library": [
+    "exp_c7398b76"
+  ],
+  "list": [
+    "exp_c7398b76"
+  ],
+  "spawns": [
+    "exp_c7398b76"
+  ],
+  "buildandcacheadjacency": [
+    "exp_c7398b76"
+  ],
+  "demand": [
+    "exp_c7398b76"
+  ],
+  "connect": [
+    "exp_c7398b76"
+  ],
+  "port": [
+    "exp_c7398b76"
+  ],
+  "localhost": [
+    "exp_c7398b76"
+  ],
+  "watchfile": [
+    "exp_c7398b76"
+  ],
+  "missing": [
+    "exp_c7398b76"
+  ],
+  "sessions": [
+    "exp_c7398b76"
   ]
 }

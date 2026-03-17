@@ -62,7 +62,15 @@ async function buildForProject(projectRoot) {
     finding: [e.query || "", (e.files || []).join(" "), (e.entities || []).join(" ")].join(" "),
   }));
 
-  const allEntries = [...research, ...decisions, ...explorations];
+  // Include script library entries (name + description + tags as embeddable text)
+  const scripts = readJsonl(path.join(memDir, "scripts.jsonl")).map(s => ({
+    id: s.id,
+    topic: s.name || "",
+    tags: s.tags || [],
+    finding: [s.name || "", s.description || "", (s.tags || []).join(" ")].join(" "),
+  }));
+
+  const allEntries = [...research, ...decisions, ...explorations, ...scripts];
 
   if (allEntries.length === 0) return 0;
 

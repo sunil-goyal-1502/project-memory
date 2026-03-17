@@ -17,7 +17,8 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const { spawn } = require("child_process");
-const { resolveProjectRoot, readJsonl, appendJsonl, addToEntityIndex, findSimilarEntry } = require(path.join(__dirname, "shared.js"));
+const shared = require(path.join(__dirname, "shared.js"));
+const { resolveProjectRoot, readJsonl, appendJsonl, addToEntityIndex, findSimilarEntry } = shared;
 
 // ── Parse CLI args: extract named flags before positional args ──
 const rawArgs = process.argv.slice(2);
@@ -99,6 +100,9 @@ try {
     }
   }
 } catch { /* graph is best-effort */ }
+
+// ── Invalidate BM25 cache (hooks will rebuild on next call) ──
+try { shared.invalidateBM25Cache(dir); } catch {}
 
 // ── Sync to CLAUDE.md / Copilot / Cursor ──
 try {

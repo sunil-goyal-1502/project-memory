@@ -197,49 +197,58 @@ async function main() {
     } catch { /* non-critical */ }
   }
 
-  // Clear memory-check gate so exploration requires a fresh check each session
-  const memCheckPath = path.join(projectRoot, ".ai-memory", ".last-memory-check");
-  try { fs.unlinkSync(memCheckPath); } catch { /* doesn't exist — fine */ }
+  // ── Initialize session state (replaces 6 separate dot-files) ──
+  const shared = require(path.resolve(__dirname, "..", "..", "scripts", "shared.js"));
+  const freshState = shared.getDefaultSessionState();
+  freshState.sessionId = sessionId || "unknown";
+  freshState.startTs = Date.now();
+  shared.writeSessionState(projectRoot, freshState);
 
-  // Clear escalation state so reminders start fresh each session
-  const reminderPath = path.join(projectRoot, ".ai-memory", ".last-reminder");
-  try { fs.unlinkSync(reminderPath); } catch { /* doesn't exist — fine */ }
-
-  // Clear exploration breadcrumb log so it tracks only this session
-  const explorationLogPath = path.join(projectRoot, ".ai-memory", ".exploration-log");
-  try { fs.unlinkSync(explorationLogPath); } catch { /* doesn't exist — fine */ }
-
-  // Clear tool history so auto-capture patterns track only this session
-  const toolHistoryPath = path.join(projectRoot, ".ai-memory", ".tool-history");
-  try { fs.unlinkSync(toolHistoryPath); } catch { /* doesn't exist — fine */ }
-
-  // Clear cache hit log so topic dedup tracks only this session
-  const cacheHitsPath = path.join(projectRoot, ".ai-memory", ".cache-hits");
-  try { fs.unlinkSync(cacheHitsPath); } catch { /* doesn't exist — fine */ }
-
-  // Ensure explorations directory exists for auto-capture of raw exploration output
-  const explorationsDir = path.join(projectRoot, ".ai-memory", "explorations");
-  if (!fs.existsSync(explorationsDir)) {
-    try { fs.mkdirSync(explorationsDir, { recursive: true }); } catch { /* non-critical */ }
+  // Also clear legacy dot-files (backward compat — remove after a few sessions)
+  for (const f of [".last-memory-check", ".last-reminder", ".exploration-log", ".tool-history", ".cache-hits"]) {
+    try { fs.unlinkSync(path.join(projectRoot, ".ai-memory", f)); } catch {}
   }
 
   // Record session start timestamp for session-summary.js delta tracking
   try {
-    fs.writeFileSync(
-      path.join(projectRoot, ".ai-memory", ".session-start-ts"),
-      String(Date.now()),
-      "utf-8"
-    );
-  } catch { /* non-critical */ }
+    fs.writeFileSync(path.join(projectRoot, ".ai-memory", ".session-start-ts"), String(Date.now()), "utf-8");
+  } catch {}
 
-  // Clear task tracker so task completion detection starts fresh each session
+  // Ensure explorations directory exists
+  const explorationsDir = path.join(projectRoot, ".ai-memory", "explorations");
+  if (!fs.existsSync(explorationsDir)) {
+    try { fs.mkdirSync(explorationsDir, { recursive: true }); } catch {}
+  }
+
+  // ── Auto-purge old explorations (>30 days) ──
   try {
-    fs.writeFileSync(
-      path.join(projectRoot, ".ai-memory", ".task-tracker"),
-      JSON.stringify({ created: 0, completed: 0, toolCallsSinceSummary: 0 }),
-      "utf-8"
-    );
-  } catch { /* non-critical */ }
+    const PURGE_DAYS = 30;
+    const purgeCutoff = Date.now() - PURGE_DAYS * 24 * 60 * 60 * 1000;
+    const exploFiles = fs.readdirSync(explorationsDir).filter(f => f.endsWith(".md"));
+    let purgedCount = 0;
+    for (const file of exploFiles) {
+      try {
+        const stat = fs.statSync(path.join(explorationsDir, file));
+        if (stat.mtimeMs < purgeCutoff) {
+          fs.unlinkSync(path.join(explorationsDir, file));
+          purgedCount++;
+        }
+      } catch {}
+    }
+    if (purgedCount > 0) {
+      // Also clean the index
+      const indexPath = path.join(explorationsDir, "explorations.jsonl");
+      if (fs.existsSync(indexPath)) {
+        const indexLines = fs.readFileSync(indexPath, "utf-8").trim().split("\n").filter(l => {
+          try {
+            const entry = JSON.parse(l.trim());
+            return !entry.ts || new Date(entry.ts).getTime() >= purgeCutoff;
+          } catch { return true; }
+        });
+        fs.writeFileSync(indexPath, indexLines.join("\n") + "\n", "utf-8");
+      }
+    }
+  } catch { /* purging is best-effort */ }
 
   // ── Background services (non-blocking) ──
   try {
@@ -273,6 +282,29 @@ async function main() {
       });
       child2.unref();
     }
+
+    // Start memory daemon if not already running (holds data in memory for fast IPC)
+    const daemonScript = path.join(projectRoot, "scripts", "daemon.js");
+    const daemonPidFile = path.join(projectRoot, ".ai-memory", ".daemon-pid");
+    let daemonRunning = false;
+    try {
+      const pid = Number(fs.readFileSync(daemonPidFile, "utf-8").trim());
+      if (pid > 0) { process.kill(pid, 0); daemonRunning = true; } // signal 0 = check if alive
+    } catch { /* not running */ }
+
+    if (!daemonRunning && fs.existsSync(daemonScript)) {
+      const daemonChild = spawn(process.execPath, [daemonScript, projectRoot], {
+        detached: true, stdio: "ignore", windowsHide: true,
+      });
+      daemonChild.unref();
+    }
+
+    // Also build file-based caches as fallback (in case daemon isn't ready for first hook call)
+    try { shared.buildAndCacheBM25(projectRoot); } catch {}
+    try {
+      const graphMod = require(path.join(projectRoot, "scripts", "graph.js"));
+      graphMod.buildAndCacheAdjacency(projectRoot);
+    } catch {}
   } catch { /* non-critical */ }
 
   // ── Record session start in dashboard history ──
@@ -305,10 +337,20 @@ async function main() {
   }
 
   // ── 1. Stats banner (FIRST LINE) ──
+  let scriptCount = 0;
+  try {
+    const scriptsPath = path.join(projectRoot, ".ai-memory", "scripts.jsonl");
+    if (fs.existsSync(scriptsPath)) {
+      const sc = fs.readFileSync(scriptsPath, "utf-8").trim();
+      if (sc) scriptCount = sc.split("\n").filter(l => l.trim()).length;
+    }
+  } catch {}
+
   const stats = statsModule.getStats(projectRoot);
+  const loadedLabel = `${decisions.length} decisions, ${research.length} research${scriptCount > 0 ? `, ${scriptCount} scripts` : ""}`;
   const statsBanner = sessionTokensSaved > 0
-    ? `**[project-memory]** Loaded: ${decisions.length} decisions, ${research.length} research | ${statsModule.formatStatsLine(sessionTokensSaved, sessionTimeSaved, stats)}`
-    : `**[project-memory]** Loaded: ${decisions.length} decisions, ${research.length} research`;
+    ? `**[project-memory]** Loaded: ${loadedLabel} | ${statsModule.formatStatsLine(sessionTokensSaved, sessionTimeSaved, stats)}`
+    : `**[project-memory]** Loaded: ${loadedLabel}`;
   messageParts.push(statsBanner);
 
   // ── 2. Decision summary ──
@@ -336,92 +378,9 @@ async function main() {
     );
   }
 
-  // ── 3. Research findings (full content, staleness-filtered) ──
-  if (research.length > 0) {
-    const { text: findingsList, freshCount, staleCount } = formatResearchFindings(research);
-
-    if (freshCount > 0) {
-      messageParts.push(
-        `\nResearch Memory: ${freshCount} findings loaded (full content). **USE these — do NOT re-investigate:**\n${findingsList}`
-      );
-    }
-
-    if (staleCount > 0) {
-      messageParts.push(
-        `\n_(${staleCount} older findings filtered — older than ${STALENESS_DAYS} days. Run check-memory.js to search all including stale.)_`
-      );
-    }
-  }
-
-  // ── 4. CITE MEMORY instruction with mandatory banner ──
-  messageParts.push(
-    `\n**CITE MEMORY** — The decisions and research findings above are REAL knowledge from previous sessions. When they are relevant to your current task, you MUST:
-
-1. **Display this green banner** (using backtick code block with the ★ format):
-
-\`★ Memory Hit ──────────────────────────────────────\`
-\`  ✓ Found relevant research in project memory — skipping further exploration.\`
-\`  Matched: "<topic1>", "<topic2>", ...\`
-\`  Savings: ~X,000 tokens, ~Y min of investigation avoided\`
-\`──────────────────────────────────────────────────────\`
-
-2. **USE the finding content directly** — do NOT re-explore or re-investigate what is already saved.
-3. **Estimate savings**: ~1,000 tokens and ~2 min per matched finding used.
-4. This banner is **MANDATORY** every time you use saved memory. It proves to the user that memory is working and shows the value.`
-  );
-
-  // ── 5. CHECK FIRST instruction ──
-  const pluginRoot = path.resolve(__dirname, "..", "..").replace(/\\/g, "/");
-
-  messageParts.push(
-    `\n**CHECK FIRST — DO NOT explore or investigate what you already know:**
-- The research findings above contain FULL content from previous sessions. USE them directly.
-- For keyword search across all findings (including stale): \`node "${pluginRoot}/scripts/check-memory.js" "keywords"\`
-- ONLY read source files or launch Explore agents for topics NOT covered by saved research.`
-  );
-
-  // ── 6. IMMEDIATE SAVE TRIGGERS ──
-  messageParts.push(
-    `\n**IMMEDIATE SAVE TRIGGERS** — Save immediately (do NOT delay) after:
-- ANY codebase exploration (Task/Explore agent, reading multiple files for research)
-- ANY web search or URL fetch (WebSearch, WebFetch)
-- When the user gives an instruction, constraint, or asks you to remember something
-- When you discover API behavior, error causes, library quirks, or workarounds`
-  );
-
-  // ── 7. Auto-save instructions ──
-  messageParts.push(
-    `\n**MANDATORY AUTO-SAVE** — You MUST do this throughout the ENTIRE session without being asked:
-
-**Save decisions** — When ANY project decision is made, IMMEDIATELY run:
-\`\`\`bash
-node "${pluginRoot}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"
-\`\`\`
-Categories: architecture|constraint|convention|testing|scope|unresolved. Examples: tech choices, patterns, naming conventions, scope boundaries, constraints.
-
-**Save research** — When you discover ANYTHING technical, save EACH FACT as a SEPARATE entry:
-\`\`\`bash
-node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>" [staleness] [--entities "File,Class,Method"]
-\`\`\`
-**ATOMIC FACTS — MANDATORY**: Each save should be ONE searchable fact (1-2 sentences). NEVER bundle multiple facts into one entry.
-- BAD: One entry covering "Windows verification pipeline architecture" with 500 words
-- GOOD: 4 separate entries: "DomService uses XPathDocument for XPath", "VerificationDetail model has XmlQuery field", etc.
-- Include \`--entities\` with file/class/method names mentioned in the finding (improves search)
-- Include \`--related "id"\` to link to related findings when relevant
-
-**If in doubt, SAVE IT.** Saving too much is far better than losing knowledge.`
-  );
-
-  // ── 8. MANDATORY end-of-session summary ──
-  messageParts.push(
-    `\n**MANDATORY: End-of-Session Summary** — Before ending ANY session, you MUST run as your FINAL action:
-\`\`\`bash
-node "${pluginRoot}/scripts/session-summary.js"
-\`\`\`
-- If it shows "PENDING SAVES DETECTED", save all pending research/decisions FIRST, then re-run
-- Do NOT end the session until the summary shows green (no pending saves)
-- This is your FINAL action before responding to the user — NON-NEGOTIABLE`
-  );
+  // ── Sections 3-8 removed: research findings, CITE MEMORY, CHECK FIRST, ──
+  // ── SAVE TRIGGERS, AUTO-SAVE, SESSION SUMMARY instructions are already ──
+  // ── in CLAUDE.md (synced by sync-tools.js). No need to duplicate here. ──
 
   // ── 9. Auto-extract reminder (if pending) ──
   const lastSessionPath = path.join(

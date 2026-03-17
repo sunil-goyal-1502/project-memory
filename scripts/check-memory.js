@@ -190,6 +190,31 @@ async function main() {
       }
     } catch { /* explorations are optional */ }
 
+    // ── Script Library (reusable parameterized commands) ──
+    try {
+      const scripts = shared.readScripts(dir);
+      if (scripts.length > 0) {
+        const scriptResults = shared.searchScripts(dir, query);
+        const relevantScripts = scriptResults.filter(r => r.score > 0.3).slice(0, 5);
+
+        if (relevantScripts.length > 0) {
+          console.log(`${C.green}${C.bold}=== Script Library (${relevantScripts.length} matches) ===${C.reset}`);
+          console.log(`${C.green}Reusable parameterized commands — fill in {{params}} and run directly.${C.reset}`);
+          console.log("");
+          for (let i = 0; i < relevantScripts.length; i++) {
+            const s = relevantScripts[i].script;
+            if (!s) continue;
+            console.log(`${C.green}${i + 1}. ${s.name} (used ${s.usage_count || 1}x)${C.reset}`);
+            console.log(`   Template: ${s.template.slice(0, 250)}`);
+            for (const p of (s.parameters || [])) {
+              console.log(`   {{${p.name}}}: ${p.description} (default: ${(p.default || "none").toString().slice(0, 60)})`);
+            }
+            console.log("");
+          }
+        }
+      }
+    } catch { /* script library is optional */ }
+
     // ── Closing directive with mandatory banner template ──
     console.log(`${C.green}${C.bold}>>> EVALUATE the entries above for semantic relevance to: "${query}" <<<${C.reset}`);
     console.log("");

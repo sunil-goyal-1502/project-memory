@@ -249,6 +249,45 @@ function extractEntitiesFromText(text) {
 }
 
 /**
+ * Classify an entity name by type based on naming patterns.
+ * Returns: "File" | "Class" | "Function" | "Namespace" | "Tool" | "Concept"
+ */
+const FILE_EXTENSIONS = new Set(["js", "ts", "py", "cs", "json", "xml", "md", "yml", "yaml", "sh", "ps1", "css", "html", "jsx", "tsx", "jsonl", "toml", "rs", "go", "java", "c", "h", "cpp", "hpp", "rb", "vue", "bat", "sln", "csproj"]);
+
+function classifyEntityType(entityName) {
+  const parts = entityName.split(".");
+  const ext = parts.length >= 2 ? parts[parts.length - 1].toLowerCase() : "";
+
+  // Namespace: dotted names where the first part is a common namespace root (system, microsoft, flaui)
+  // or where all parts look like words (not filenames like "pre-tool-use.js")
+  if (parts.length >= 3) return "Namespace"; // 3+ segments always namespace
+  if (parts.length === 2 && !FILE_EXTENSIONS.has(ext)) return "Namespace";
+  // Distinguish "shared.js" (File) from "system.xml" (Namespace): filenames typically have
+  // hyphens/underscores or are lowercase-only short words; namespace parts are longer
+  if (parts.length === 2 && FILE_EXTENSIONS.has(ext)) {
+    const stem = parts[0];
+    // If stem looks like a namespace root (no hyphens, length > 4, common namespace names)
+    if (/^(system|microsoft|flaui|appium|newtonsoft|nunit|xunit|moq)$/.test(stem)) return "Namespace";
+    return "File";
+  }
+
+  if (/async$/i.test(entityName)) return "Function";
+  if (/^[a-z]/.test(entityName) && /[A-Z]/.test(entityName)) return "Function"; // camelCase
+  if (/^[A-Z][a-z]/.test(entityName)) return "Class";
+  if (/^(curl|npm|node|git|docker|dotnet|pip|python|powershell|az|grep|find)$/.test(entityName)) return "Tool";
+  return "Concept";
+}
+
+/**
+ * Extract typed entities from text.
+ * Returns: [{ name, type }] where type is File|Class|Function|Namespace|Tool|Concept.
+ */
+function extractTypedEntities(text) {
+  const names = extractEntitiesFromText(text);
+  return names.map(name => ({ name, type: classifyEntityType(name) }));
+}
+
+/**
  * Extract relationship triples from finding text + known entities.
  * Uses verb patterns to find subject-predicate-object relationships.
  */
@@ -505,10 +544,93 @@ function rebuildGraph(projectRoot) {
   return backfillGraph(projectRoot);
 }
 
+// ── Graph Adjacency Cache ──
+
+const GRAPH_ADJ_CACHE_FILE = ".graph-adj-cache.json";
+
+/**
+ * Build adjacency index and cache to file. Called at session-start.
+ */
+function buildAndCacheAdjacency(projectRoot) {
+  const triples = readGraph(projectRoot);
+  const adj = buildAdjacencyIndex(triples);
+
+  let mtime = 0;
+  try { mtime = fs.statSync(graphPath(projectRoot)).mtimeMs; } catch {}
+
+  const cachePath = path.join(projectRoot, ".ai-memory", GRAPH_ADJ_CACHE_FILE);
+  try {
+    fs.writeFileSync(cachePath, JSON.stringify({ mtime, adj }), "utf-8");
+  } catch {}
+
+  return adj;
+}
+
+/**
+ * Load cached adjacency index. Returns null if stale or missing.
+ */
+function loadCachedAdjacency(projectRoot) {
+  const cachePath = path.join(projectRoot, ".ai-memory", GRAPH_ADJ_CACHE_FILE);
+  try {
+    const cache = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+    const currentMtime = fs.statSync(graphPath(projectRoot)).mtimeMs;
+    if (cache.mtime === currentMtime && cache.adj) {
+      return cache.adj;
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Expand from seed entities using CACHED adjacency (fast path for hooks).
+ * Falls back to full readGraph+buildAdjacencyIndex if cache miss.
+ */
+function expandFromEntitiesCached(projectRoot, seedEntities, depth = 1) {
+  let adj = loadCachedAdjacency(projectRoot);
+  if (!adj) {
+    // Fallback: full rebuild
+    const triples = readGraph(projectRoot);
+    if (triples.length === 0) {
+      return { entities: new Set(seedEntities), connections: [], relatedFindingIds: new Set() };
+    }
+    adj = buildAdjacencyIndex(triples);
+  }
+
+  const visited = new Set();
+  const connections = [];
+  const relatedFindingIds = new Set();
+  let frontier = seedEntities.map(e => e.toLowerCase());
+
+  for (let hop = 1; hop <= depth; hop++) {
+    const nextFrontier = [];
+    for (const entity of frontier) {
+      if (visited.has(entity)) continue;
+      visited.add(entity);
+      const edges = adj[entity] || [];
+      for (const edge of edges) {
+        if (!visited.has(edge.target)) {
+          connections.push({ from: entity, predicate: edge.predicate, to: edge.target, src: edge.src, hop });
+          relatedFindingIds.add(edge.src);
+          nextFrontier.push(edge.target);
+        }
+      }
+    }
+    frontier = nextFrontier;
+  }
+
+  const allEntities = new Set(visited);
+  for (const e of seedEntities) allEntities.add(e.toLowerCase());
+  for (const c of connections) { allEntities.add(c.from); allEntities.add(c.to); }
+
+  return { entities: allEntities, connections, relatedFindingIds };
+}
+
 module.exports = {
   addTriple, addTriples, readGraph,
   buildAdjacencyIndex, expandFromEntities,
-  extractEntitiesFromText, extractRelationships, extractTriplesFromEntry,
+  buildAndCacheAdjacency, loadCachedAdjacency, expandFromEntitiesCached,
+  extractEntitiesFromText, classifyEntityType, extractTypedEntities,
+  extractRelationships, extractTriplesFromEntry,
   backfillGraph, rebuildGraph,
   getEntityTimeline, getChangesSince,
   buildGlobalGraph, expandFromEntitiesGlobal,

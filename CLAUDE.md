@@ -56,6 +56,11 @@ node "<USER_HOME>/project-memory/scripts/session-summary.js"
 - Use ONNX MiniLM-L6 embeddings as primary search — no BM25 fallback — @huggingface/transformers is a hard dependency installed with the plugin. Embeddings are the only search mechanism.
 - Raw exploration output auto-captured to .ai-memory/explorations/ as verbatim markdown files with YAML frontmatter — User wants complete agent output preserved as-is for future sessions, not summaries or atomic facts. Graph-indexed for relevant retrieval.
 - Directory junction from plugin cache to source repo for permanent sync — CLAUDE_PLUGIN_ROOT resolves to cache copy regardless of installPath. Junction at cache/project-memory-marketplace/project-memory/1.0.0/ -> <USER_HOME>/project-memory makes all source edits instantly active in running hooks.
+- Separate script library from research: scripts.jsonl with parameterized templates — Auto-captured scripts (52% of research.jsonl) pollute BM25 search, drowning out real findings. Scripts need parameterization ({{build_id}}, {{log_id}}) for reuse. Separate store enables different search+injection UX.
+- Hook-based architecture creates synchronous performance bottlenecks: pre/post-tool-use fire on EVERY tool call (100+ per session). Critical path includes BM25 index rebuild, JSONL parsing, and multiple fs.readFileSync calls per invocation. Recommend: extract intent detection to shared module, cache keyword patterns, implement read-through cache for frequently accessed files. — Pre-tool-use.js performs 7+ fs.readFileSync ops per exploratory call (research.jsonl, config.json, graph.jsonl, .last-memory-check, .cache-hits, session registry). Post-tool-use.js writes to 3+ files per exploration. No caching between hook calls. Graph expansion disabled in hooks (hookExpansionDepth=1) but still reads graph.jsonl. With 100+ research entries and keyword pattern matching on every call, BM25 rebuilds entire inverted index each time.
+
+## Constraint
+- Only store reusable scripts with real logic — not trivial one-liner commands — Commands like cat, grep, find, ls, head, tail, sed are general-purpose tools Claude can generate on-the-fly. isReusableScript() filters these out. Only multi-step scripts with auth, API calls, loops, or data processing pipelines are saved to scripts.jsonl.
 
 ## Testing
 - E2E tests should cover save, search, graph, and session-summary pipeline — Validates the full project-memory lifecycle in a single pass
@@ -66,100 +71,49 @@ node "<USER_HOME>/project-memory/scripts/session-summary.js"
 ## Research Memory
 <!-- Auto-managed by project-memory plugin. Do not edit between markers. -->
 
-117 research findings loaded (full content). **USE these — do NOT re-investigate:**
+79 research findings loaded (full content). **USE these — do NOT re-investigate:**
 
+- **Daemon achieves 1-9ms processing, 14-100ms total hook time**: Memory daemon on TCP localhost achieves: daemon processing 1-9ms (in-memory BM25+graph), POST hooks 14ms total, PRE hooks 99ms warm (Node.js startup dominates). Cold PRE ~2s on Windows (Node binary not cached by OS). Fallback works correctly when daemon killed. Port written to .daemon-port, PID to .daemon-pid, auto-shutdown after 2hr inactivity.
+- **Daemon architecture for persistent in-memory caching**: Hook-per-process architecture costs ~1500ms per call (Node.js startup + require). File-based caching saves only 11ms (BM25 cache read 4ms vs rebuild 14ms). Solution: TCP localhost daemon spawned at session-start, holds BM25 index + graph adjacency + research entries in memory, hooks connect via net.connect to localhost:PORT (port written to .daemon-port), fallback to direct execution if daemon down.
+- **data-files-pipeline**: Data file pipeline: (1) Source: research.jsonl, decisions.jsonl, graph.jsonl, explorations/explorations.jsonl, scripts.jsonl. (2) Cached indices: .bm25-cache.json (mtime-keyed), .graph-adj-cache.json (large 1MB+ adjacency index), .intent-embeddings.json (classifier refs). (3) Runtime state: .session-state.json, .exploration-log, .tool-history (.max 50 entries). (4) Metadata: entity-index.json, metadata.json, embeddings.json (1.2MB ONNX embedding cache). (5) Session tracking: session-history.jsonl, .session-start-ts. Total ~2.5MB working data for single project.
+- **hook-contract-json-io**: Hook I/O contract: stdin=valid JSON {tool_name, tool_input:{command,description,query,prompt,url,subagent_type}, cwd, session_id, tool_response, tool_result, transcript_path}. Stdout=JSON {systemMessage?:string, hookSpecificOutput?:{hookEventName:string, permissionDecision:(allow|deny), permissionDecisionReason?}, decision?:(block|allow), reason?:string} or {}. Exit always 0. Pre-tool-use injects memory findings (0.5+ BM25 score max 5 findings). Post-tool-use blocks on IMMEDIATE_SAVE_TOOLS or escalation. Session state persists: .session-state.json v1 with reminder, memoryCheck, taskTracker, lastInjection, cacheHits fields.
+- **daemon-candidate-design**: Daemon candidate design: persistent Node.js process listening on TCP localhost (port from .daemon-port file). Responsibilities: (1) Watch research.jsonl, decisions.jsonl, graph.jsonl, explorations.jsonl via fs.watchFile, (2) Rebuild BM25 index atomically on research.jsonl mtime change, (3) Rebuild graph adjacency index on graph.jsonl change, (4) Serve indices + search queries via IPC for hooks (eliminates per-hook rebuild cost). Hooks query daemon via net.connect(port), receive cached results. Session-start can spawn daemon if not running. Daemon detaches, logs to .daemon.log, writes .daemon-port on startup, reads it on shutdown.
+- **windows-ipc-net-patterns**: Windows Node.js IPC options: (1) net.createServer() with named pipes pattern \\.\pipe\name (requires fs.exists check for duplicate server), (2) TCP localhost on random port (listen(0, 127.0.0.1)) — simpler, no FS race conditions. Daemon detection: write port to .daemon-port file, child checks if file exists + tries net.connect with short timeout. On Windows, can also use env variable to pass port. TCP approach preferred over named pipes for cross-platform simplicity. Port 0 lets OS choose ephemeral port.
+- **session-start-background-processes**: Session-start.js spawns 3 detached background processes using spawn(execPath, args, {detached:true, stdio:ignore, windowsHide:true}): (1) intent-classifier.js --build if not cached, (2) build-embeddings.js --all (embeddings + graph cache), (3) dashboard.js --background. All use child.unref() to detach. Also synchronously builds BM25 and graph adjacency caches via graphMod.buildAndCacheAdjacency(). Spawns use cwd:projectRoot or inherit env. No daemon process exists — only one-shot background tasks per session start.
+- **hooks-side-effects**: Pre-tool-use writes lastInjection timestamp to session state for double-block detection, sets memoryCheck.lastCheckTs for TTL gating. Post-tool-use: (1) logs exploration breadcrumb, (2) writes exploration markdown + JSONL index + graph triples + entities, (3) spawns detached build-embeddings.js child (unref, stdio:ignore), (4) appends tool history for auto-capture patterns. Exploration capture extracts entities via graph.js extractEntitiesFromText (50 limit), files via regex, tags from prompt.
+- **hooks-blocking-logic**: Pre-tool-use blocks on escalation: if reminderCount > 2 AND no save since last reminder. Post-tool-use blocks immediately on IMMEDIATE_SAVE_TOOLS (Task/WebSearch/WebFetch). Bash gets gradual escalation with THROTTLE_MS=3min between reminders. Blocks skip when: (1) double-block within 30s of pre-injection, (2) parallel Task cooldown <5s, (3) more tasks pending completion. Task completion triggers session-summary block when all created tasks are completed. Periodic checkpoint blocks after 40 tool calls.
+- **hooks-data-files**: Hooks read during execution: research.jsonl (BM25 search), graph.jsonl (adjacency expansion), entity-index.json (entity lookup), explorations/explorations.jsonl (past explorations BM25), scripts.jsonl (script library search), .session-state.json (session reminder/task state), config.json (graph settings). Pre-tool-use caches BM25 index to .bm25-cache.json keyed by research.jsonl mtime. Post-tool-use writes to: research.jsonl (auto-capture), explorations.jsonl (exploration index), graph.jsonl (exploration triples), entity-index.json (exploration entities), .exploration-log (breadcrumb), .tool-history (for auto-capture detection).
+- **hooks-architecture**: Pre-tool-use hook stdin contains: tool_name, tool_input (query/command/description), cwd, session_id, transcript_path. Stdout must be valid JSON: {systemMessage?, hookSpecificOutput?{hookEventName, permissionDecision:(allow|deny), permissionDecisionReason?}}. Post-tool-use hook receives tool_response (full agent output string, not tool_result). Outputs {decision:(block|empty), reason?} for blocking, or {} to allow. Both hooks write to session state (.session-state.json) for reminder count, memory check TTL, task tracker, and lastInjection timestamp. Session state persists across tool calls within a session.
+- **E2E test suite: 22 tests covering full plugin pipeline**: test-e2e.js validates: module loading (shared.js + graph.js exports), save pipeline (save-research creates entry, BM25 cache invalidated), search (check-memory finds entries), BM25 caching (build/load/score roundtrip), graph caching (adjacency build/load), entity types (File/Class/Tool/Namespace), script library (isReusableScript filter, grouping), session state (write/read roundtrip), intent detection (exploratory vs operational, curl POST fix), undo-save (remove + verify gone), corruption detection (malformed JSONL lines).
+- **All 4 refactoring phases complete: DRY, caching, UX, scalability**: Phase 1: DRY extraction (pre-tool-use 679->350, post-tool-use 991->472), session state consolidated into .session-state.json, corruption detection in readJsonl, curl POST fix, timing metrics. Phase 2: BM25 + graph adjacency cached at session-start (.bm25-cache.json + .graph-adj-cache.json), hooks use cached data, save-research invalidates cache. Phase 3: parallel Task cooldown, session-start trimmed to ~500 tokens, double-block prevention via lastInjection flag, Read/Grep/Glob lightweight injection. Phase 4: script grouping by skeleton (36->28 templates), exploration auto-purge >30 days, entity type system (File/Class/Function/Tool/Concept).
+- **Phase 1A complete: DRY extraction eliminated 850+ LOC from hooks**: Extracted all duplicated code from pre-tool-use.js and post-tool-use.js to shared.js: debugLog, isSelfCall, isExploratoryBash/Task, intent keywords, readSessionState/writeSessionState, getLastSaveTs, hasResearch, searchExplorationsForHook, ANSI constants, MATCHED_TOOLS. pre-tool-use: 679->347 lines. post-tool-use: 991->472 lines. Also added: LIGHTWEIGHT_TOOLS (Read/Grep/Glob), session state consolidation, timing metrics, curl POST fix, double-block prevention, parallel Task cooldown.
+- **Comprehensive plugin audit: 3 critical, 8 high, 6 medium issues found**: 3 parallel audit agents found: CRITICAL: BM25 rebuilt every hook call (O(n) per tool use), 300+ LOC duplicated across hooks (intent detection, root discovery, state mgmt), research.jsonl corruption silently drops entries. HIGH: Read/Grep/Glob not hooked, session-start systemMessage too long (competes with CLAUDE.md), 9 scattered state files, double-blocking on Task agents, no staleness/archival mechanism. See full audit in conversation.
+- **Missing features: no delete/archive, no merge/consolidate, no per-project isolation, no versioning**: No way to delete stale/wrong entries from research.jsonl — must manually edit. No merge/consolidate UI for duplicate findings. Multi-project users on same machine: no project isolation (e.g., project-A research appears in project-B searches). No backup versioning — only .bak files from manual saves. Exploration capture auto-saves to disk but no way to delete/review/organize explorations before they bloat .ai-memory/. Auto-capture detects retry-success but no manual audit/approval before saving. Scripts library grows indefinitely without dedup enforcement. CLAUDE.md can exceed token budget if 500+ entries.
+- **Architecture: dual-search strategy (BM25 in hooks + embeddings in check-memory) creates inconsistent UX**: pre-tool-use.js uses BM25 for all searches (line 428: shared.buildBM25Index). check-memory.js uses embeddings for search (ONNX MiniLM). This creates inconsistency: (1) cache-hit in hooks shows different results than check-memory, (2) no embeddings fallback in hooks despite embeddings being primary architecture, (3) config.json has searchMode 'hybrid'|'flat'|'graph' but hooks ignore it and always use BM25. Recommend: unify to embeddings everywhere (hooks + check-memory), or if BM25 needed in hooks for speed, cache embeddings.json per-session.
+- **Stateful dot-files sprawl: 9 separate .ai-memory files track ephemeral state per session**: .last-reminder tracks escalation state (reminderCount, lastSaveTs, ts) [post-tool-use.js 648-684]. .last-memory-check tracks TTL [pre-tool-use.js 276-284]. .task-tracker tracks task completion [post-tool-use.js 591-613]. .exploration-log tracks exploration breadcrumbs [shared.js 115-147]. .tool-history tracks command history for auto-capture [shared.js 207-235]. .cache-hits logs recent cache lookups [pre-tool-use.js 471-513]. .session-start-ts records session start [session-start.js 226-233]. .hook-debug.log for debug output [pre-tool-use.js 26-34]. .intent-embeddings.json caches intent classifier [session-start.js 250-255]. Total: 9 separate files with unclear consolidation path. Recommend: single .ai-memory/.session-state.json for all ephemeral data with versioned schema.
+- **BM25 scalability: index rebuilt on every hook invocation, O(n) cost**: BM25 index (shared.js lines 150-168) rebuilt during EVERY pre-tool-use hook call for exploratory tools. buildBM25Index tokenizes entire research.jsonl (150+ lines each), builds inverted index, computes IDF for all terms. At 100 research entries: O(100 * avg_200_tokens) = O(20K token operations) per hook. With 40+ tool calls/session, that's 800K+ token ops just for BM25. Remediation: cache index in memory, invalidate on save; or defer to async embeddings-based search instead. Graph expansion in hooks also reads graph.jsonl despite hookExpansionDepth=1 limiting traversal.
+- **Keyword pattern duplication in intent detection**: EXPLORATION_KEYWORDS, OPERATIONAL_KEYWORDS, SAFE_OPERATIONAL_PATTERNS, EXPLORATION_PATTERNS defined identically in pre-tool-use.js (lines 148-189) AND post-tool-use.js (lines 152-189). isExploratoryBash function duplicated across both files. isExploratoryTask also duplicated. These 200+ lines of keyword/pattern matching should be extracted to shared.js:isExploratoryBash(input) and shared.isExploratoryTask(input) to enable single-source-of-truth updates and reduce hook size.
+- **Hook I/O patterns: pre-tool-use reads 7+ files per exploratory call, post-tool-use writes 4+ files per task**: Pre-tool-use.js (lines 410-625): readJsonl(research.jsonl) [line 425], readConfig(config.json) [line 435], searchExplorations() calls readExplorationsIndex() [line 519 loop], readFileSync(.cache-hits) [line 474], readFileSync(.last-memory-check) [line 629], readFileSync(.last-reminder) [line 302]. For each exploratory tool, it rebuilds BM25 index (shared.buildBM25Index line 428) from scratch even if same query. Post-tool-use.js (lines 863-964): writes tracker [611], writes state [680], writes exploration markdown file [401], appends to explorations.jsonl [404], calls addToEntityIndex (writes entity-index.json [100]). Total: 7 reads + 5 writes per session with modest data size.
+- **Code duplication: findProjectRoot, scanHomeForProjects, resolveProjectRoot**: findProjectRoot (15 lines), scanHomeForProjects (30 lines), resolveProjectRoot (20 lines) implemented identically in shared.js AND in pre-tool-use.js (48-122), post-tool-use.js (51-125), session-start.js (15-70). Total: 65 duplicate lines across 3 hook files. These functions should be exported from shared.js and imported by hooks instead of duplicated. Impact: maintenance burden (bug in one must be fixed in 4 places), adds 65 LOC to hook startup.
+- **LLM testCaseStepNumber cycles back to 1 during state recovery - unreliable for per-step budgets**: Validated in build 46057316 logs 507 and 524: LLM cycles testCaseStepNumber back to 1 when it attempts state recovery (restart test from beginning). Pattern observed: 1->18->1->12->1. This means per-step retry budgets based on LLM step numbers reset every cycle and never trigger. Solution: use DOM-change-based progress tracking (count action tools since last DOM change) instead of LLM step numbers.
+- **isReusableScript filter: positive and negative patterns for script capture**: isReusableScript() in shared.js gates auto-capture to scripts.jsonl. Minimum 100 chars. Positive: TOKEN/Bearer auth, curl POST/PUT/PATCH, for/while loops, node -e, piping to node/python, JSON payloads. Negative: cat, head, tail, sed, grep, find, ls, wc, diff, sort, echo, pwd, powershell Get-Content. Cleaned 102 -> 36 scripts after applying filter.
+- **PR 4969737 review rounds: MerlinBot, Sanjay, Jagadish all addressed**: PR 4969737 had 3 review rounds. MerlinBot: injection risk in adb args, resource leak, edge case index, async deadlock, iOS fallback error. Sanjay: clear data breaks suite for non-signin tests, LLM can invoke ClearAppData wrongly. Jagadish: remove LocalTool attr, use MandatoryToPass not hardcoded names, DOM check false positives on read-only tools, FRE prompt too risky, LLM step numbers unreliable. All addressed in 5 commits.
+- **Jagadish review: ClearAppData must not be LocalTool, use MandatoryToPass not hardcoded names**: Jagadish's key feedback: (1) Remove [LocalTool] from ClearAppDataAsync entirely so LLM cant discover it - dont rely on guard rails. (2) Use testCase.MandatoryToPass flag instead of hardcoded test name check (01_TC_SignIn) for deciding when to clear app data. (3) DOM change detection should skip read-only tools like GetPageSourceAsync. (4) Remove FRE prompt section - too risky, LLM may dismiss real dialogs.
+- **Plugin cache junction broke during session - must copy files manually**: Directory junction from cache/1.0.0 to source repo broke (became regular directory). Source edits were NOT visible to hooks. Fix: recreate junction via PowerShell New-Item -ItemType Junction. Always verify with diff after editing source files.
+- **Script library separates scripts from research in project-memory**: New scripts.jsonl store holds parameterized command templates separately from research.jsonl. Migration moved 74 scripts (52% of entries) out of research. Scripts are auto-parameterized: UUIDs become {{project_id}}, numeric IDs become {{build_id}}/{{log_id}}, file paths become {{file_path}}. Pre-tool-use hook injects matching scripts as 'Reusable Scripts Found' banner. CLAUDE.md gets new Script Library section between markers.
+- **sync-tools.js CLAUDE.md sync flow**: sync-tools.js updateClaudeMd() reads research.jsonl, filters by 7-day staleness cutoff, renders fresh entries as markdown bullets between markers. Called by save-research.js line 105 after every save. formatResearchFindingsList() splits into fresh/stale arrays. No special handling for Script: entries - they render identically to research.
+- **Build 46066083: sign-in is the blocking failure across all 12 buckets**: Build 46066083 (framework-resilience-fixes branch): All 12 test suites failed. 8 of 12 buckets never got past sign-in. The 4 buckets that passed sign-in (logs 473, 530, 537, 541) ran additional tests. Sign-in fails because the LLM gets stuck on FRE privacy dialog screens ('Your privacy option', 'Microsoft respects your privacy') after successful credential entry, consuming all steps without dismissing them.
+- **Build 46066083 ClearAppDataAsync fails: adb not found on CI agents**: ClearAppDataAsync from our PR fails on ALL CI agents with: 'An error occurred trying to start process adb with working directory D:\a\_work\1\s\tools\AIAssistedTestAutomation. The system cannot find the file specified.' The adb binary is not in PATH on the hosted build agents. This is a bug in our HandleClearAppData implementation - it calls adb directly instead of using the Appium driver.
+- **UX problem: 6 blocks for 3 background agents**: Launching 3 parallel background Task agents triggered 6 PostToolUse blocks (2 per agent - one for each hook copy). Each requires manual save to unblock. This is the #1 UX pain point.
 - **graph.js extractTriplesFromEntry**: extractTriplesFromEntry creates 3 types of triples: (1) provenance - finding ID 'mentions' entity, (2) semantic verbs via extractRelationships (uses, depends_on, calls), (3) co-occurrence 'related_to' fallback within sentences.
 - **graph.js extractEntitiesFromText**: extractEntitiesFromText uses 9 regex patterns: PascalCase, file names, method calls, async methods, namespaces, CLI tools, URLs. All lowercased. Stops words filtered (50+ common words). Returns unique entity strings.
-- **Script: Check what node_modules exist in source**: Check what node_modules exist in source: ls "<USER_HOME>/project-memory/node_modules" 2>/dev/null | head -10
-- **Script: Check what node_modules exist in cache**: Check what node_modules exist in cache: ls "<USER_HOME>/.claude/plugins/cache/project-memory-marketplace/project-memory/1.0.0/node_modules" 2>/dev/null | head -10
-- **Script: Read marketplace.json from cache**: Read marketplace.json from cache: cat "<USER_HOME>/.claude/plugins/cache/project-memory-marketplace/project-memory/1.0.0/.claude-plugin/marketplace.json"
-- **Script: Read package.json to understand plugin structure**: Read package.json to understand plugin structure: find "<USER_HOME>/project-memory" -name "package.json" -exec cat {} \;
-- **Script: List files in source project-memory directory**: List files in source project-memory directory: ls -la "<USER_HOME>/project-memory/" | head -20
-- **Script: Find plugin config files in cache**: Find plugin config files in cache: find "<USER_HOME>/.claude/plugins/cache/project-memory-marketplace/project-memory/1.0.0" -maxdepth 2 -type f -name "*.json" -o -name ".claude-plugin" 2>&1 | head -10
-- **Script: Search for plugin registry files**: Search for plugin registry files: find "<USER_HOME>/.claude" -name "*installed*" -o -name "*registry*" 2>&1 | head -20
-- **Script: List all files in .claude directory**: List all files in .claude directory: ls -la "<USER_HOME>/.claude/" 2>&1
-- **Script: Find all JSON files in plugins directory**: Find all JSON files in plugins directory: find "<USER_HOME>/.claude/plugins" -type f -name "*.json" 2>&1 | head -20
 - **graph.hookExpansionDepth default**: graph.hookExpansionDepth defaults to 1 hop in config.js. Controls max graph traversal depth in pre-tool-use hook (sync/fast), vs expansionDepth=2 for async check-memory.
 - **Config.js module structure**: config.js provides readConfig/writeConfig with deep-merge defaults. Stored at .ai-memory/config.json. Settings: searchMode, graph (enabled/depth), embeddings, BM25, hooks (thresholds/TTL), autoCapture.
-- **Script: Check if other scripts also differ**: Check if other scripts also differ: for f in graph.js config.js build-embeddings.js stats.js; do echo "--- $f ---"; diff "<USER_HOME>/project-memory/scripts/$f" "<USER_HOME>/.claude/plugins/cache/project-memory-marketplace/project-memory/1.0.0/scripts/$f" > /dev/null 2>&1 && echo "SAME" || echo "DIFFERS"; done
-- **Script: Check if shared.js also differs**: Check if shared.js also differs: diff "<USER_HOME>/project-memory/scripts/shared.js" "<USER_HOME>/.claude/plugins/cache/project-memory-marketplace/project-memory/1.0.0/scripts/shared.js" 2>/dev/null | head -5 && echo "---" && diff "<USER_HOME>/project-memory/scripts/shared.js" "<USER_HOME>/.claude/plugins/cache/project-memory-marketplace/project-memory/1.0.0/scripts/shared.js" 2>/dev/null | wc -l
-- **Script: Create PR with linked work item**: Create PR with linked work item: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null)
-
-# Create PR via ADO REST API
-curl -s -X POST \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/git/repositories/dfbb009c-c5c9-4519-b9b9-3d6fef17d5cb/pullrequests?api-version=7.1" \
-  -d '{
-    "sourceRefName": "refs/heads/users/sungoyal/framework-resilience-fixes",
-    "targetRefName": "refs/heads/main",
-    "title": "Add framework resilience fixes to reduce CI test failures",
-    "description": "## Summary\n- **System crash detection**: Skip retries on \"Pixel Launcher isn'\''t responding\" / ANR / \"has stopped\" errors instead of retrying 3 more times against a crashed emulator\n- **Per-step retry budget** (max 10/15 per step): Prevent one stuck step from consuming all 100 execution steps in state-recovery loops\n- **DOM change detection**: Detect UI-stuck scenarios when 3 consecutive actions produce no DOM change, and fail fast\n- **App data clear on test failure**: New `ClearAppDataAsync` tool (Android `pm clear` + iOS `mobile:clearApp`) called in teardown to remove stale sign-in state between retries\n- **FRE/MFA/credential error handling**: Add system prompt guidance for both Android and iOS\n- **Progressive session recovery backoff**: Replace fixed 2s delay with 2s/5s/10s/15s + adb reconnect\n\n## Context\nBuild 46057316 (Android AI Assisted Daily Build) failed with 20+ test failures across 13 stages, wasting ~4 hours of CI time. Root causes: emulator crashes, stale sign-in state, UI-stuck loops, FRE blocking, MFA walls, and session loss.\n\n## Test Plan\n- [x] `dotnet build` passes (0 errors)\n- [x] Unit tests: 79 passed, 2 failed (pre-existing LLM token failures, same as main)\n- [ ] Run Android AI Assisted Daily Build pipeline with this branch\n- [ ] Verify mandatory sign-in tests pass on clean emulator\n- [ ] Verify FRE screens are dismissed correctly\n- [ ] Verify stuck-UI tests fail fast (< 30 steps) instead of consuming 60-80 steps\n\nLinked work item: #11304771",
-    "workItemRefs": [{"id": "11304771"}]
-  }' | node -e "const c=[];process.stdin.on('data',d=>c.push(d));process.stdin.on('end',()=>{const r=JSON.parse(Buffer.concat(c));console.log('PR ID:', r.pullRequestId);console.log('URL:', r.url);console.log('Web URL:', r.repository ? 'https://office.visualstudio.com/OC/_git/AIHubServices/pullrequest/' + r.pullRequestId : 'N/A');if(r.message) console.log('Error:', r.message)})"
-- **Script: Create ADO work item with single quotes to preserve $Task**: Create ADO work item with single quotes to preserve $Task: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null)
-
-curl -s -X POST \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json-patch+json" \
-  'https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/wit/workitems/$Task?api-version=7.1' \
-  -d '[
-    {"op": "add", "path": "/fields/System.Title", "value": "Framework resilience fixes to reduce Android AI test automation CI failures"},
-    {"op": "add", "path": "/fields/System.Description", "value": "Build 46057316 failed with 20+ test failures across 13 stages. This task implements P0+P1 framework fixes: system crash detection, per-step retry budgets, DOM change detection, app data clear on failure, FRE/MFA/credential handling in prompts, and progressive session recovery backoff."},
-    {"op": "add", "path": "/fields/System.AreaPath", "value": "OC"},
-    {"op": "add", "path": "/fields/Microsoft.VSTS.Common.Priority", "value": 1}
-  ]' 2>&1 | head -20
-- **Script: Create ADO work item with simpler area path**: Create ADO work item with simpler area path: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null)
-
-# Try with full response to see what happened
-curl -s -X POST \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json-patch+json" \
-  "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/wit/workitems/\$Task?api-version=7.1" \
-  -d '[
-    {"op": "add", "path": "/fields/System.Title", "value": "Framework resilience fixes to reduce Android AI test automation CI failures"},
-    {"op": "add", "path": "/fields/System.Description", "value": "Build 46057316 failed with 20+ test failures across 13 stages. This task implements P0+P1 framework fixes: system crash detection, per-step retry budgets, DOM change detection, app data clear on failure, FRE/MFA/credential handling in prompts, and progressive session recovery backoff."},
-    {"op": "add", "path": "/fields/System.AreaPath", "value": "OC"},
-    {"op": "add", "path": "/fields/Microsoft.VSTS.Common.Priority", "value": 1}
-  ]' 2>&1 | head -30
-- **Script: Create ADO work item**: Create ADO work item: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null)
-
-# Create a work item (Task type) in the OC project
-curl -s -X POST \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json-patch+json" \
-  "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/wit/workitems/\$Task?api-version=7.1" \
-  -d '[
-    {"op": "add", "path": "/fields/System.Title", "value": "Framework resilience fixes to reduce Android AI test automation CI failures"},
-    {"op": "add", "path": "/fields/System.Description", "value": "<p>Build 46057316 (Android AI Assisted Daily Build) failed with 20+ test failures across 13 stages due to 5 systemic framework gaps:</p><ol><li><b>System crash not detected</b>: Pixel Launcher crashes caused 3 wasted retries per test</li><li><b>No per-step retry budget</b>: Stuck UI consumed 60-80 of 100 execution steps</li><li><b>Stale sign-in state</b>: App data not cleared between retries, sign-in tests failed 4/4 times</li><li><b>No FRE/MFA/credential guidance</b>: LLM wasted retries on first-run screens and MFA walls</li><li><b>Fixed session recovery delay</b>: 2s wait insufficient for crashed emulators</li></ol><p>This task implements P0+P1 fixes across 8 files (264 lines) to address all 5 categories. Changes are cross-platform (Android + iOS).</p>"},
-    {"op": "add", "path": "/fields/System.AreaPath", "value": "OC\\M365 Copilot Hub Front Door Service"},
-    {"op": "add", "path": "/fields/Microsoft.VSTS.Common.Priority", "value": 1}
-  ]' | node -e "const c=[];process.stdin.on('data',d=>c.push(d));process.stdin.on('end',()=>{const r=JSON.parse(Buffer.concat(c));console.log('Work Item ID:', r.id);console.log('URL:', r._links?.html?.href || r.url)})"
 - **Exploration capture test**: Running E2E test of exploration capture pipeline - first exploration dispatched to verify capture and retrieval
-- **Script: **: find "<USER_HOME>/project-memory/hooks" -type f | head -20
-- **Script: Check explorations index**: Check explorations index: test -f "<USER_HOME>/project-memory/.ai-memory/explorations.jsonl" && wc -l "<USER_HOME>/project-memory/.ai-memory/explorations.jsonl" || echo "NO explorations.jsonl"
 - **Exploration retrieval: pre-tool-use searches explorations via BM25 + graph, injects as systemMessage**: pre-tool-use.js searchExplorations() function: reads explorations.jsonl, BM25 scores against new prompt, also checks for research-only and exploration-only matches. Injects past exploration file path + metadata as systemMessage banner so Claude can Read the full file.
 - **Exploration capture pipeline: PostToolUse -> markdown file + JSONL index + graph triples + entity index**: captureExploration() in post-tool-use.js: reads tool_response, extracts file paths + entities + tags, writes YAML-frontmatter markdown to explorations/, appends to explorations.jsonl index, extracts graph triples via extractTriplesFromEntry, updates entity-index.json, spawns background embedding build.
 - **PostToolUse hook tool_response field contains Task agent output**: The Claude Code PostToolUse hook receives the agent's complete output in the 'tool_response' field (not 'tool_result'). The old code used input.tool_result which was always null. tool_response contains the full verbatim string for Task/Explore agents.
-- **Script: Check which tools support both platforms**: Check which tools support both platforms: grep -n "supportedPlatforms.*AndroidMobile.*IosMobile\|supportedPlatforms.*IosMobile.*AndroidMobile" /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/DeviceInteractionServices/LocalTools/AppiumLocalToolsService.cs | head -5
 - **Framework fixes must be cross-platform: Android AND iOS**: AppiumLocalTools codebase runs for both Android and iOS. Any fixes in Appium layer (ToolHandler, SessionManager, LocalToolsService) must support both platforms. ClearAppDataAsync should work on iOS too (use terminateApp or uninstall/reinstall pattern). System prompt additions should also be added to iOS system prompt.
-- **Script: Verify inputSchema escaping matches existing tools**: Verify inputSchema escaping matches existing tools: grep -A1 'inputSchema.*appId' /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/DeviceInteractionServices/LocalTools/AppiumLocalToolsService.cs | head -6
-- **Script: Read HandleResetApp exact code**: Read HandleResetApp exact code: sed -n '850,876p' /tmp/AIHubServices-fixes/tools/AppiumLocalTools/Handlers/AppiumToolHandler.cs
-- **Script: Read HandleResetApp area for insertion point**: Read HandleResetApp area for insertion point: sed -n '875,895p' /tmp/AIHubServices-fixes/tools/AppiumLocalTools/Handlers/AppiumToolHandler.cs
-- **Script: Read full TestOrchestrator for precise editing**: Read full TestOrchestrator for precise editing: cat /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/TestOrchestrator.cs
-- **Script: Read CloseApp and ResetApp tool definitions**: Read CloseApp and ResetApp tool definitions: sed -n '295,330p' /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/DeviceInteractionServices/LocalTools/AppiumLocalToolsService.cs
-- **Script: Find existing app lifecycle tools pattern**: Find existing app lifecycle tools pattern: grep -n "ResetAppAsync\|CloseAppAsync\|TerminateApp\|LocalTool.*reset\|LocalTool.*close" /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/DeviceInteractionServices/LocalTools/AppiumLocalToolsService.cs | head -15
-- **Script: Read session recovery call site**: Read session recovery call site: sed -n '80,115p' /tmp/AIHubServices-fixes/tools/AppiumLocalTools/Handlers/AppiumToolHandler.cs
-- **Script: Read TryRecoverSessionAsync implementation**: Read TryRecoverSessionAsync implementation: sed -n '55,110p' /tmp/AIHubServices-fixes/tools/AppiumLocalTools/SessionManagement/AppiumSessionManager.cs
-- **Script: Read HandleResetApp and surrounding context**: Read HandleResetApp and surrounding context: sed -n '840,890p' /tmp/AIHubServices-fixes/tools/AppiumLocalTools/Handlers/AppiumToolHandler.cs
-- **Script: Read SubstrateLlmAssistedTestExecutionService.cs**: Read SubstrateLlmAssistedTestExecutionService.cs: cat -n /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/IntelligenceServices/SubstrateLlmAssistedTestExecutionService.cs
-- **Script: Read TestOrchestrator.cs**: Read TestOrchestrator.cs: cat -n /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/TestOrchestrator.cs
-- **Script: Read IGUIInteractionService interface**: Read IGUIInteractionService interface: cat /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/DeviceInteractionServices/IGUIInteractionService.cs
-- **Script: Find IGUIInteractionService interface**: Find IGUIInteractionService interface: grep -r "IGUIInteractionService" /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/Interfaces/ --include="*.cs" -l 2>/dev/null && cat /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/DeviceInteractionServices/IGUIInteractionService.cs 2>/dev/null | head -40 || grep -rl "interface IGUIInteractionService" /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/ --include="*.cs" | head -3
-- **Script: Find TestStatus enum**: Find TestStatus enum: cat /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/Common/Models/TestStatus.cs 2>/dev/null || grep -r "enum TestStatus" /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/ --include="*.cs" -l
-- **Script: Read TestCase model**: Read TestCase model: cat /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/Data/Models/TestCase.cs
-- **Script: Read GuardRailResult model**: Read GuardRailResult model: cat /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/IntelligenceServices/Models/GuardRailResult.cs
-- **Script: Read TestFileResult model**: Read TestFileResult model: cat /tmp/AIHubServices-fixes/tools/AIAssistedTestAutomation/Reporting/Models/TestFileResult.cs
 - **Build 46057316 session loss: emulator died mid-test, 4 recovery attempts failed**: In ADALAISKU Bucket 2 (log 507), 59_TC_PreviewerPresentation_v2.md: Appium session lost after submitting positive feedback. TryRecoverSessionAsync tried 4 times — no connected Android device found within timeout. SessionManager only waits 2 seconds between retries, insufficient for crashed emulator.
 - **Build 46057316 FRE blocking: ScanLaunch spent 50+ steps dismissing First Run Experience screens**: In ADALBCWAF Bucket 4 (log 499), 14_TC_ScanLaunch_v2.md: After Create → Scan, FRE privacy screen appeared. LLM tried Close → hit home, Next → hit another FRE (Dont send optional data), dismissed → landed on Copilot home. Repeated hamburger → Create → Scan → FRE loop consumed 50+ steps. No automated FRE suppression exists in framework.
 - **Build 46057316 UI stuck pattern: Pages WebView consumed 66 steps with no DOM change**: In ADALAISKU Bucket 2 (log 524), 49_TC_LibPageRecallWeb_v2.md Step 19 (navigate back from Pages): LLM tried Back arrow by accessibilityId, resource-id XPath, Android BACK key x4. All returned success but no DOM change. 66 steps consumed. Similarly 59_TC_PreviewerFileOpen_v2.md bounced between Search screen and Word previewer for 80+ steps trying to find Show key takeaways button.
@@ -173,12 +127,6 @@ curl -s -X POST \
 - **Guard rails are mostly TODO stubs — only ActivateApp has real logic**: AndroidAppiumToolExecutionGuardRails.cs has per-tool guard rail methods (Click, Swipe, SendKeys, GetPageSource, LaunchApp, FindElement, Clear) but ALL return GuardRailResult.Allow() with TODO comments. Only ActivateAppAsync has real logic: blocks after 3 calls for non-mandatory tests.
 - **Teardown does NOT clear app data between retries**: AppiumAndroidTestTearDown.ExecuteAsync() only calls CloseAppAsync for two packages (officehubrow + officehubrow.internal) and EndSessionAsync. Does NOT clear app data/cache via adb pm clear. This means stale sign-in state persists across retries.
 - **TestOrchestrator retry logic: blind retries without failure category awareness**: TestOrchestrator.ExecuteWithRetriesAsync() retries with 1-second delay but does NOT inspect failure reason. Mandatory tests get 3 retries (RetryCount=3), regular tests get 1. Circuit breaker only triggers on device patterns (No devices found, ECONNREFUSED, session creation failed) — misses system crashes like Pixel Launcher isn't responding.
-- **Script: Read teardown implementation**: Read teardown implementation: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/IntelligenceServices/AppiumAndroidTestTearDown.cs
-- **Script: Read Android guard rails implementation**: Read Android guard rails implementation: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/IntelligenceServices/AndroidAppiumToolExecutionGuardRails.cs
-- **Script: Read guard rails implementation**: Read guard rails implementation: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/Services/ToolExecutionGuardRails.cs 2>/dev/null || find /tmp/AIHubServices/tools/AIAssistedTestAutomation -name "*GuardRail*" -o -name "*guardRail*" -o -name "*guardrail*" | head -5
-- **Script: Read Android system prompt (first 400 lines)**: Read Android system prompt (first 400 lines): cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/SystemPrompts/AndroidAppiumSystemPrompt.cs | head -400
-- **Script: Read LLM execution service source**: Read LLM execution service source: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/IntelligenceServices/SubstrateLlmAssistedTestExecutionService.cs
-- **Script: Read TestOrchestrator source**: Read TestOrchestrator source: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/TestOrchestrator.cs
 - **TestCase retry count configuration**: TestCase.UpdateProperties(sourceFolder) sets: isTestSetup = (sourceFolder == 'testsetup'), MandatoryToPass = isTestSetup. RetryCount = 3 if testsetup, 1 otherwise. Called in TestCase constructor when parsing test files from Data folder. Determines retry behavior: testsetup tests get 3 retries, regular tests get 1 retry.
 - **Appium session recovery mechanism**: AppiumSessionManager stores _lastPlatformName, _lastAppiumServerUrl, _lastCapabilities for recovery. IsSessionHealthy() tries _driver.PageSource operation - returns false if exception. TryRecoverSessionAsync(): verifies stored config exists, forces cleanup of old driver (ForceCleanupDriver catches exceptions), waits 2s, calls StartSession() with saved config to create new session. Recovery used when session crashes to restore automation state.
 - **AppiumAndroidTestTearDown workflow**: AppiumAndroidTestTearDown.ExecuteAsync() runs three independent steps: (1) CaptureScreenshotAsync - captures final screenshot with status timestamp to FinalScreenshotPath, (2) TerminateAppsAsync - loops through AppPackageNames (com.microsoft.office.officehubrow, internal) calling CloseAppAsync for each, (3) EndSessionAsync - calls EndSessionAsync to terminate Appium session. Each step catches/logs exceptions without propagating.
@@ -187,107 +135,7 @@ curl -s -X POST \
 - **SubstrateLlmAssistedTestExecutionService execution loop**: Execution loop in InvokeExecutionAsync: while stepNumber <= maxSteps (100). Gets LLM recommendation, captures DOM via CapturePageSourceAsync(). If LLM declares Passed/Failed + pending tool, defers completion (completionDeferralCount <3) to execute tool first. On Passed/Failed, sets testResult.TestStatus and exits loop. Tracks FailedSteps/SuccessfulSteps. Exits if stepNumber > maxSteps with error message.
 - **Mandatory test failure stops execution**: When a test has MandatoryToPass=true and fails environment variable processing or final attempt fails after retries, TestOrchestrator logs '🛑 Mandatory test case X failed' and calls break to stop further test execution. Applies to testsetup tests from UpdateProperties().
 - **TestOrchestrator retry logic**: TestOrchestrator uses ExecuteWithRetriesAsync loop: retryAttempt starts at 0, maxRetries from testCase.RetryCount. For testsetup (mandatory) tests: RetryCount=3, for regular tests: RetryCount=1. Circuit breaker detects device failures via error message patterns (No devices found, session creation failed, ECONNREFUSED, ECONNRESET). Stops after 2 consecutive device failures with health check.
-- **Script: **: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/IntelligenceServices/SubstrateLlmAssistedTestExecutionService.cs | sed -n '300,500p'
-- **Script: **: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/IntelligenceServices/SubstrateLlmAssistedTestExecutionService.cs | sed -n '140,300p'
-- **Script: **: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/IntelligenceServices/SubstrateLlmAssistedTestExecutionService.cs | grep -A 10 -B 5 "already\|signed in\|Pixel Launcher\|isn't responding" | head -80
-- **Script: **: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/IntelligenceServices/SubstrateLlmAssistedTestExecutionService.cs | head -150
-- **Script: **: wc -l /tmp/AIHubServices/tools/AIAssistedTestAutomation/IntelligenceServices/SubstrateLlmAssistedTestExecutionService.cs
-- **Script: **: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/TestOrchestrator.cs | grep -A 60 "ExecuteWithRetriesAsync"
-- **Script: **: cat /tmp/AIHubServices/tools/AIAssistedTestAutomation/TestOrchestrator.cs | tail -400 | head -200
-- **Script: SignIn ADAL SKU retry attempts 2-4 detailed flow**: SignIn ADAL SKU retry attempts 2-4 detailed flow: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null)
-
-# Log 402: ADAL_SKU retry attempts 2-4 (already signed in pattern)
-curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/402" | grep -E "(═══ Step|testStep|testStatus|reasoning|hamburger|Menu|Sign in|already signed|Pixel Launcher|Attempt)" | sed -n '30,80p'
-- **Script: Parse MSA Premium full failure flow**: Parse MSA Premium full failure flow: cat "<USER_HOME>\.claude\projects\C--Users-sungoyal-project-memory\044b978d-9a86-4419-a0d0-9218925adb54\tool-results\bgw3goskk.txt" | grep -E "(═══ Step|testStep|testStatus|reasoning|password|MFA|Verify your phone|incorrect|already signed|attempt|Mandatory|retries)" | head -80
-- **Script: Deep dive into MSA Premium sign-in failure flow**: Deep dive into MSA Premium sign-in failure flow: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null)
-
-# Deep dive: SignIn_MSA_PREM password/MFA failure (Log 406) - all 4 attempts
-curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/406" | grep -E "(═══ Step|toolName|toolType|testStep|testStatus|reasoning|password|MFA|Verify your phone|incorrect|Sign in|already signed|attempt)" | head -100
-- **Script: Deep dive into SignIn already-signed-in failure flow**: Deep dive into SignIn already-signed-in failure flow: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null)
-
-# Deep dive: SignIn_ADAL_SKU already-signed-in failure (Log 402) - full execution flow
-curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/402" | grep -E "(═══ Step|toolName|toolType|testStep|testStatus|reasoning|Pixel Launcher|Sign in|already signed|hamburger|Menu|content-desc)" | head -80
-- **Script: Extract failure reasoning from all main test logs**: Extract failure reasoning from all main test logs: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null)
-
-# Get reasoning for key failures
-for log_id in 402 406 472 499 507 524 525; do
-  echo "=== LOG $log_id: FAILURE REASONS ==="
-  curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/$log_id" | grep -E "(\"reasoning\".*Failed|test case '.*' (passed|failed)|testStatus.*Failed)" | head -10
-  echo ""
-done
-- **Script: Extract test completion summaries from all bucket logs**: Extract test completion summaries from all bucket logs: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null)
-
-# Get all Run UI Automation CLI and Retry logs, extract test completion lines
-for log_id in 402 406 472 499 507 508 516 524 525; do
-  echo "=== LOG $log_id ==="
-  curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/$log_id" | grep -E "(🏁 Test completed|✅ Successful|test case '.*' passed|test case '.*' failed|Mandatory test case|Retrying test)" | head -20
-  echo ""
-done
-- **Script: Fetch TestScenarios Bucket 2/5 test outcome details**: Fetch TestScenarios Bucket 2/5 test outcome details: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/507" | grep -E "(Test completed|test case|Passed|Failed|Mandatory|FAILED|results|retries)" | head -30
-- **Script: Fetch TestScenarios Bucket 5/5 test outcome details**: Fetch TestScenarios Bucket 5/5 test outcome details: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/524" | grep -E "(Test completed|test case|Passed|Failed|Mandatory|FAILED|results|retries)" | head -30
-- **Script: Fetch ADALAISKU Bucket 4/5 test outcome details**: Fetch ADALAISKU Bucket 4/5 test outcome details: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/499" | grep -E "(Test completed|test case|Passed|Failed|Mandatory|FAILED|results|retries)" | head -30
-- **Script: Fetch Analyze Retry Results log for test outcome details**: Fetch Analyze Retry Results log for test outcome details: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/590" | grep -E "(Test completed|test case|Passed|Failed|Mandatory|FAILED|results|retries|test_)" | head -30
-- **Script: Fetch Run UI Automation CLI log (MSAPREMIUM Bucket 1/1)**: Fetch Run UI Automation CLI log (MSAPREMIUM Bucket 1/1): TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/472" | tail -100
-- **Script: Fetch Run UI Automation CLI log (ADALAISKU Bucket 4/5)**: Fetch Run UI Automation CLI log (ADALAISKU Bucket 4/5): TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/406" | tail -100
-- **Script: Fetch Run UI Automation CLI log (ADALAISKU Bucket 2/5) for test details**: Fetch Run UI Automation CLI log (ADALAISKU Bucket 2/5) for test details: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/logs/402" | tail -100
-- **Script: Extract all failed records with error details and log IDs**: Extract all failed records with error details and log IDs: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/Timeline?api-version=7.1" | node -e "
-const chunks = [];
-process.stdin.on('data', d => chunks.push(d));
-process.stdin.on('end', () => {
-  const data = JSON.parse(Buffer.concat(chunks));
-  const records = data.records || [];
-  // Show failed items with details
-  const failed = records.filter(r => r.result === 'failed');
-  console.log('=== FAILED RECORDS (' + failed.length + ') ===\n');
-  failed.forEach(r => {
-    console.log('Type:', r.type, '| Name:', r.name);
-    console.log('  Log ID:', r.log?.id, '| Log URL:', r.log?.url?.substring(0, 120));
-    if (r.issues) r.issues.forEach(i => console.log('  ISSUE:', i.type, '-', i.message?.substring(0, 300)));
-    console.log();
-  });
-  
-  // Also show all stages/jobs summary
-  console.log('=== ALL STAGES ===');
-  records.filter(r => r.type === 'Stage').forEach(r => console.log(' ', (r.result||r.state).padEnd(12), r.name));
-  console.log('\n=== ALL JOBS ===');
-  records.filter(r => r.type === 'Job').forEach(r => console.log(' ', (r.result||r.state).padEnd(12), r.name));
-});
-"
-- **Script: Fetch test runs associated with this build**: Fetch test runs associated with this build: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/OC/_apis/test/runs?buildUri=vstfs:///Build/Build/46057316&api-version=7.1" | node -e "
-const chunks = [];
-process.stdin.on('data', d => chunks.push(d));
-process.stdin.on('end', () => {
-  const data = JSON.parse(Buffer.concat(chunks));
-  console.log('Test runs found:', data.count);
-  (data.value || []).forEach(r => {
-    console.log('Run:', r.id, '|', r.name, '| State:', r.state, '| Total:', r.totalTests, '| Passed:', r.passedTests, '| Failed:', r.unanalyzedTests || r.totalTests - r.passedTests);
-  });
-});
-"
-- **Script: Fetch build timeline - all stages/jobs/tasks with pass/fail status**: Fetch build timeline - all stages/jobs/tasks with pass/fail status: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/build/builds/46057316/Timeline?api-version=7.1" | node -e "
-const chunks = [];
-process.stdin.on('data', d => chunks.push(d));
-process.stdin.on('end', () => {
-  const data = JSON.parse(Buffer.concat(chunks));
-  const records = data.records || [];
-  // Show all records with their result/state
-  records.forEach(r => {
-    if (r.type === 'Stage' || r.type === 'Job' || r.type === 'Task') {
-      const icon = r.result === 'succeeded' ? 'PASS' : r.result === 'failed' ? 'FAIL' : r.result === 'skipped' ? 'SKIP' : r.state || r.result || '???';
-      console.log(icon.padEnd(10), r.type.padEnd(6), r.name);
-      if (r.result === 'failed' && r.issues && r.issues.length > 0) {
-        r.issues.forEach(i => console.log('           ERROR:', i.message?.substring(0, 200)));
-      }
-    }
-  });
-});
-"
-- **Script: Fetch build details via ADO REST API**: Fetch build details via ADO REST API: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/OC/_apis/build/builds/46057316?api-version=7.1" | python3 -m json.tool 2>/dev/null || curl -s -H "Authorization: Bearer $TOKEN" "https://office.visualstudio.com/OC/_apis/build/builds/46057316?api-version=7.1" | node -e "process.stdin.on('data',d=>console.log(JSON.stringify(JSON.parse(d),null,2)))"
-- **Script: Check recent graph triples**: Check recent graph triples: tail -10 "<USER_HOME>/project-memory/.ai-memory/graph.jsonl"
 - **E2E test: project-memory pipeline validation** [30]: End-to-end test verifying save-research, check-memory, graph extraction, and session-summary all work correctly in sequence
-- **Script: **: find "<USER_HOME>/project-memory/.ai-memory" -type f -name "*.json" | head -15
-- **Script: **: find "<USER_HOME>/project-memory/hooks/scripts" -type f -name "*.js"
-- **Script: **: ls -la "<USER_HOME>/project-memory/hooks/" | head -20
 - **Hybrid graph+embeddings architecture for code memory search**: Best approach: embeddings find semantically similar entry points, graph traversal expands context with related entities. Flow: (1) embed query, (2) cosine similarity finds top entries, (3) graph traverse from those entries to find dependencies/relationships/fixes, (4) return enriched results. Microsoft GraphRAG uses similar pattern: entity extraction → graph build → community detection → hybrid search. LevelGraph for structure, ONNX MiniLM for similarity.
 - **LevelGraph: lightweight embedded graph DB for Node.js**: LevelGraph is a graph DB built on LevelDB via the 'level' npm package. Runs in Node.js and browsers. Uses hexastore approach (6 indices per triple) for fast graph traversal. Stores triples as subject-predicate-object. Supports JSON-LD, Turtle, N3 formats. npm package: levelgraph. Zero external server dependency — fully embedded. Ideal for local knowledge graphs in plugins.
 - **GraphRAG entity and relationship extraction using LLMs**: GraphRAG combines text extraction, network analysis, LLM prompting into end-to-end RAG system. Extraction: LLM prompted to extract named entities + descriptions, relationships between entity pairs in each text unit. FastGraphRAG substitutes LLM reasoning with traditional NLP (NLTK, spaCy for noun phrases). Process: slice input into TextUnits, extract entities/relationships/claims, build community hierarchy, generate summaries. Local search combines structured KG + unstructured documents at query time. Entity/relationship extraction implementation customizable via LangChain/LlamaIndex.
@@ -304,12 +152,52 @@ process.stdin.on('end', () => {
 - **TerminusDB: Open-source graph database with JSON document API**: TerminusDB is an open-source graph database and document store linking/processing structured/unstructured JSON documents in a knowledge graph via simple document API. Provides Node.js/browser client (npm registry). Features: closed-world RDF knowledge graph, high in-memory performance, controlled document API with JSON-LD syntax, GraphQL queries, datalog logical engine.
 - **LevelGraph: LevelDB-based graph database for Node.js**: LevelGraph is a graph database built on LevelDB through the level library, usable in Node.js and browsers. Follows Hexastore approach with six indices per triple for fast access. Supports Linked Data formats: JSON-LD, Turtle, N3. Lightweight alternative to traditional graph DBs.
 - **HydraDB architecture and capabilities**: HydraDB is a serverless context infrastructure for AI systems that stores context, relationships, decisions, and timeline evolution. Positions itself differently from vector databases: stores relationships, decisions, and timeline (vector DBs are flat document indexes with no relationships). Ultra-low latency in-memory data stores with highest precision recall and relational awareness.
-- **Script: Check raw API response**: Check raw API response: TOKEN=$(az account get-access-token --resource 499b84ac-1321-427f-aa17-267ca6975798 --query accessToken -o tsv 2>/dev/null) && curl -s -X PATCH \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"isDisabled": false}' \
-  "https://office.visualstudio.com/e853b87d-318c-4879-bedc-5855f3483b54/_apis/git/repositories/af16575a-e946-4581-8a77-efdeac7bea84?api-version=7.1"
 
 _(22 older findings filtered — older than 7 days. Run check-memory.js to search all including stale.)_
 
 <!-- project-memory-research:end -->
+
+<!-- project-memory-scripts:start -->
+## Script Library
+<!-- Auto-managed by project-memory plugin. Do not edit between markers. -->
+
+10 script templates (36 total scripts). **Reuse these — fill in {{params}} instead of rebuilding commands:**
+
+- **Analyze high-value and low-value entries** (4 variants, 4x total): `node -e "
+const fs = require('fs');
+const readline = require('readline');
+
+let entries = [];
+const rl = readline.createI...`
+  Variants: Analyze high-value and low-value entries, Check what Script: references remain in research, Debug script BM25 search +1 more
+- **Fetch build timeline - all stages/jobs/tasks with pass/fail status** (3 variants, 3x total): `TOKEN=$(az account get-access-token --resource {{resource_id}} --query accessToken -o tsv 2>/dev/null) && curl -s -H "Au...`
+  Variants: Fetch build timeline - all stages/jobs/tasks with pass/fail status, Fetch test runs associated with this build, Extract all failed records with error details and log IDs
+  Params: `{{resource_id}}`, `{{uuid}}`, `{{build_id}}`
+- **Fetch Analyze Retry Results log for test outcome details** (2 variants, 3x total): `TOKEN=$(az account get-access-token --resource {{resource_id}} --query accessToken -o tsv 2>/dev/null) && curl -s -H "Au...`
+  Variants: Fetch Analyze Retry Results log for test outcome details, Fetch ADALAISKU Bucket 4/5 test outcome details
+  Params: `{{resource_id}}`, `{{uuid}}`, `{{build_id}}`, `{{log_id}}`
+- **Fetch Run UI Automation CLI log (ADALAISKU Bucket 2/5) for test details** (2x): `TOKEN=$(az account get-access-token --resource {{resource_id}} --query accessToken -o tsv 2>/dev/null) && curl -s -H "Au...`
+  Params: `{{resource_id}}`, `{{uuid}}`, `{{build_id}}`, `{{log_id}}`
+- **Analyze research.jsonl structure and compute statistics** (2 variants, 2x total): `cat "<USER_HOME>/project-memory/.ai-memory/research.jsonl" | node -e "
+const readline = require('readline');
+const...`
+  Variants: Analyze research.jsonl structure and compute statistics, Analyze script entries and duplicate topics
+- **Identify exact duplicates and confidence analysis** (2x): `node -e "
+const fs = require('fs');
+const readline = require('readline');
+
+let entries = [];
+const rl = readline.createI...`
+- **Fetch ADO work item details** (2x): `TOKEN=$(az account get-access-token --resource {{resource_id}} --query accessToken -o tsv) && curl -s -H "Authorization:...`
+  Params: `{{resource_id}}`, `{{uuid}}`, `{{workitem_id}}`
+- **Debug T13 reply failure** (2 variants, 2x total): `TOKEN=$(az account get-access-token --resource {{resource_id}} --query accessToken -o tsv 2>/dev/null)
+REPO="{{uuid}}"
+P...`
+  Variants: Debug T13 reply failure, Post T14 reply and check T15 status
+  Params: `{{resource_id}}`, `{{uuid}}`, `{{uuid_2}}`
+- **Check raw API response** (1x): `TOKEN=$(az account get-access-token --resource {{resource_id}} --query accessToken -o tsv 2>/dev/null) && curl -s -X PAT...`
+  Params: `{{resource_id}}`, `{{uuid}}`, `{{repo_id}}`
+- **Fetch build details via ADO REST API** (1x): `TOKEN=$(az account get-access-token --resource {{resource_id}} --query accessToken -o tsv 2>/dev/null) && curl -s -H "Au...`
+  Params: `{{resource_id}}`, `{{build_id}}`, `{{build_id_2}}`
+
+<!-- project-memory-scripts:end -->

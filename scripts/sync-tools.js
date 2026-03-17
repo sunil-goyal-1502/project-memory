@@ -19,6 +19,8 @@ const CLAUDE_RESEARCH_MARKER_START = "<!-- project-memory-research:start -->";
 const CLAUDE_RESEARCH_MARKER_END = "<!-- project-memory-research:end -->";
 const CLAUDE_AUTOSAVE_MARKER_START = "<!-- project-memory-autosave:start -->";
 const CLAUDE_AUTOSAVE_MARKER_END = "<!-- project-memory-autosave:end -->";
+const CLAUDE_SCRIPTS_MARKER_START = "<!-- project-memory-scripts:start -->";
+const CLAUDE_SCRIPTS_MARKER_END = "<!-- project-memory-scripts:end -->";
 
 function readDecisions(projectRoot) {
   const filePath = path.join(projectRoot, ".ai-memory", "decisions.jsonl");
@@ -338,6 +340,66 @@ ${findingsList}
   return content;
 }
 
+function readScripts(projectRoot) {
+  const filePath = path.join(projectRoot, ".ai-memory", "scripts.jsonl");
+  if (!fs.existsSync(filePath)) return [];
+  const content = fs.readFileSync(filePath, "utf-8").trim();
+  if (!content) return [];
+  const scripts = [];
+  for (const line of content.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try { scripts.push(JSON.parse(trimmed)); } catch {}
+  }
+  return scripts;
+}
+
+function generateClaudeScriptsSection(scripts) {
+  // Import grouping from shared.js
+  const sharedMod = require(path.join(__dirname, "shared.js"));
+
+  let content = `${CLAUDE_SCRIPTS_MARKER_START}
+## Script Library
+<!-- Auto-managed by project-memory plugin. Do not edit between markers. -->
+
+`;
+  if (scripts.length === 0) {
+    content += `_No reusable scripts captured yet._
+
+`;
+  } else {
+    const groups = sharedMod.groupScriptsByTemplate(scripts);
+    const topGroups = groups.slice(0, 10);
+
+    content += `${topGroups.length} script templates (${scripts.length} total scripts). **Reuse these — fill in {{params}} instead of rebuilding commands:**
+
+`;
+    for (const group of topGroups) {
+      const representative = group.scripts[0]; // best example
+      const variantCount = group.scripts.length;
+      const paramNames = (representative.parameters || []).map(p => `\`{{${p.name}}}\``).join(", ");
+      const truncTemplate = representative.template.length > 120 ? representative.template.slice(0, 120) + "..." : representative.template;
+
+      if (variantCount === 1) {
+        content += `- **${representative.name}** (${representative.usage_count || 1}x): \`${truncTemplate}\`\n`;
+      } else {
+        // Show as grouped template with variant names
+        const variantNames = group.scripts.slice(0, 3).map(s => s.name).join(", ");
+        const moreCount = variantCount > 3 ? ` +${variantCount - 3} more` : "";
+        content += `- **${representative.name}** (${variantCount} variants, ${group.totalUsage}x total): \`${truncTemplate}\`\n`;
+        content += `  Variants: ${variantNames}${moreCount}\n`;
+      }
+      if (paramNames) {
+        content += `  Params: ${paramNames}\n`;
+      }
+    }
+    content += "\n";
+  }
+
+  content += `${CLAUDE_SCRIPTS_MARKER_END}`;
+  return content;
+}
+
 function generateAutoSaveSection(pluginRoot) {
   const scriptPath = pluginRoot.replace(/\\/g, "/");
   return `${CLAUDE_AUTOSAVE_MARKER_START}
@@ -394,12 +456,14 @@ function updateClaudeMd(projectRoot, groups, research) {
   const autoSaveSection = generateAutoSaveSection(pluginRoot);
   const decisionsSection = generateClaudeSection(groups);
   const researchSection = generateClaudeResearchSection(research);
+  const scripts = readScripts(projectRoot);
+  const scriptsSection = generateClaudeScriptsSection(scripts);
 
   if (!fs.existsSync(filePath)) {
-    // Create CLAUDE.md with auto-save at top, then decisions, then research
+    // Create CLAUDE.md with auto-save at top, then decisions, then research, then scripts
     fs.writeFileSync(
       filePath,
-      `# Project Context\n\n${autoSaveSection}\n\n${decisionsSection}\n\n${researchSection}\n`,
+      `# Project Context\n\n${autoSaveSection}\n\n${decisionsSection}\n\n${researchSection}\n\n${scriptsSection}\n`,
       "utf-8"
     );
     return filePath;
@@ -455,6 +519,26 @@ function updateClaudeMd(projectRoot, groups, research) {
     content = content.trimEnd() + "\n\n" + researchSection + "\n";
   }
 
+  // Update scripts section
+  const scriptsStartIdx = content.indexOf(CLAUDE_SCRIPTS_MARKER_START);
+  const scriptsEndIdx = content.indexOf(CLAUDE_SCRIPTS_MARKER_END);
+
+  if (scriptsStartIdx !== -1 && scriptsEndIdx !== -1) {
+    content =
+      content.substring(0, scriptsStartIdx) +
+      scriptsSection +
+      content.substring(scriptsEndIdx + CLAUDE_SCRIPTS_MARKER_END.length);
+  } else if (scripts.length > 0) {
+    // Insert after research section
+    const afterResearch = content.indexOf(CLAUDE_RESEARCH_MARKER_END);
+    if (afterResearch !== -1) {
+      const insertPoint = afterResearch + CLAUDE_RESEARCH_MARKER_END.length;
+      content = content.substring(0, insertPoint) + "\n\n" + scriptsSection + content.substring(insertPoint);
+    } else {
+      content = content.trimEnd() + "\n\n" + scriptsSection + "\n";
+    }
+  }
+
   fs.writeFileSync(filePath, content, "utf-8");
   return filePath;
 }
@@ -500,9 +584,12 @@ function syncAll(projectRoot) {
   );
   metadata.researchTokenCount = Math.ceil(researchChars / 4);
 
+  const scripts = readScripts(projectRoot);
+  metadata.scriptCount = scripts.length;
+
   fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2), "utf-8");
 
-  return { decisions: decisions.length, research: research.length, files };
+  return { decisions: decisions.length, research: research.length, scripts: scripts.length, files };
 }
 
 module.exports = { syncAll, readDecisions, readResearch, groupByCategory, formatDecisionsMarkdown, formatResearchTopicIndex };

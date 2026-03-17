@@ -40,6 +40,12 @@ const DEFAULTS = {
     retryOverlapRatio: 0.3,     // token overlap for retry-success detection
     explorationMinCommands: 3,  // min exploratory commands for discovery pattern
   },
+  scriptLibrary: {
+    enabled: true,
+    maxInjectedScripts: 2,      // max scripts in pre-tool-use systemMessage
+    maxClaudeMdScripts: 10,     // max scripts shown in CLAUDE.md
+    parameterizeOnCapture: true, // auto-parameterize captured commands
+  },
 };
 
 /**

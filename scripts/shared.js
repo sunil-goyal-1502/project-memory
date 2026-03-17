@@ -63,10 +63,24 @@ function readJsonl(filePath) {
   const content = fs.readFileSync(filePath, "utf-8").trim();
   if (!content) return [];
   const entries = [];
-  for (const line of content.split("\n")) {
-    const trimmed = line.trim();
+  let corruptedCount = 0;
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
     if (!trimmed) continue;
-    try { entries.push(JSON.parse(trimmed)); } catch { /* skip malformed */ }
+    try {
+      entries.push(JSON.parse(trimmed));
+    } catch {
+      corruptedCount++;
+    }
+  }
+  if (corruptedCount > 0) {
+    // Log corruption warning (visible in hook debug log and stderr)
+    const msg = `[project-memory] WARNING: ${corruptedCount} corrupted line(s) in ${path.basename(filePath)} (${entries.length} valid entries loaded)`;
+    try {
+      const logDir = path.dirname(filePath);
+      fs.appendFileSync(path.join(logDir, ".hook-debug.log"), `[${new Date().toISOString()}] CORRUPTION: ${msg}\n`, "utf-8");
+    } catch {}
   }
   return entries;
 }
@@ -80,6 +94,8 @@ function appendJsonl(filePath, entry) {
 function tokenize(text) {
   if (!text) return [];
   return text
+    .replace(/([a-z])([A-Z])/g, "$1 $2")           // camelCase split: "appiumSession" → "appium Session"
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")     // PascalCase split: "HTMLParser" → "HTML Parser"
     .toLowerCase()
     .split(/[\s\.\,\;\:\(\)\[\]\{\}\|\!\?\"\'\`\~\@\#\$\%\^\&\*\+\=\<\>\/\\]+/)
     .filter(t => t.length > 0);
@@ -183,6 +199,55 @@ function bm25Score(query, bm25Index, k1 = 1.2, b = 0.75) {
   return Object.entries(scores).map(([docId, score]) => ({ docId, score })).sort((a, b) => b.score - a.score);
 }
 
+// ── BM25 Cache ──
+
+const BM25_CACHE_FILE = ".bm25-cache.json";
+
+/**
+ * Build BM25 index and write to cache file. Called at session-start.
+ * Cache key: mtime of research.jsonl (fast check, no content hash needed).
+ */
+function buildAndCacheBM25(projectRoot) {
+  const researchPath = path.join(projectRoot, ".ai-memory", "research.jsonl");
+  const research = readJsonl(researchPath);
+  const index = buildBM25Index(research);
+
+  let mtime = 0;
+  try { mtime = fs.statSync(researchPath).mtimeMs; } catch {}
+
+  const cache = { mtime, ...index };
+  const cachePath = path.join(projectRoot, ".ai-memory", BM25_CACHE_FILE);
+  try {
+    fs.writeFileSync(cachePath, JSON.stringify(cache), "utf-8");
+  } catch {}
+
+  return index;
+}
+
+/**
+ * Load cached BM25 index. Returns null if stale or missing.
+ */
+function loadCachedBM25(projectRoot) {
+  const cachePath = path.join(projectRoot, ".ai-memory", BM25_CACHE_FILE);
+  const researchPath = path.join(projectRoot, ".ai-memory", "research.jsonl");
+  try {
+    const cache = JSON.parse(fs.readFileSync(cachePath, "utf-8"));
+    const currentMtime = fs.statSync(researchPath).mtimeMs;
+    if (cache.mtime === currentMtime && cache.invertedIndex) {
+      return { invertedIndex: cache.invertedIndex, docLengths: cache.docLengths, avgDocLen: cache.avgDocLen, N: cache.N };
+    }
+  } catch {}
+  return null;
+}
+
+/**
+ * Invalidate BM25 cache (called after save-research).
+ */
+function invalidateBM25Cache(projectRoot) {
+  const cachePath = path.join(projectRoot, ".ai-memory", BM25_CACHE_FILE);
+  try { fs.unlinkSync(cachePath); } catch {}
+}
+
 // ── Deduplication ──
 
 function findSimilarEntry(existingEntries, newTopic, newTags) {
@@ -275,10 +340,11 @@ function detectAutoCapture(projectRoot, currentCall) {
       // Extract meaningful tags from the command
       const tags = extractCommandTags(currentCall.command || currentCall.description || "");
       return {
-        topic: "Script: " + (currentCall.description || "").slice(0, 80),
+        type: "script",
+        topic: (currentCall.description || "").slice(0, 80),
         tags: ["auto-capture", "bash", "script", "retry-success", ...tags],
-        finding: (currentCall.description ? currentCall.description + ": " : "")
-          + (currentCall.command || ""),
+        command: currentCall.command || "",
+        description: currentCall.description || "",
         source_tool: "auto-capture",
       };
     }
@@ -293,10 +359,11 @@ function detectAutoCapture(projectRoot, currentCall) {
   if (recentExploratory.length >= 3 && currentCall.exploratory && currentCall.success) {
     const tags = extractCommandTags(currentCall.command || currentCall.description || "");
     return {
-      topic: "Script: " + (currentCall.description || "").slice(0, 80),
+      type: "script",
+      topic: (currentCall.description || "").slice(0, 80),
       tags: ["auto-capture", "bash", "script", "discovery", ...tags],
-      finding: (currentCall.description ? currentCall.description + ": " : "")
-        + (currentCall.command || ""),
+      command: currentCall.command || "",
+      description: currentCall.description || "",
       source_tool: "auto-capture",
     };
   }
@@ -332,19 +399,34 @@ function extractCommandTags(cmdStr) {
 }
 
 /**
- * Auto-save a detected capture as research.
- * Directly appends to research.jsonl (fast, no subprocess spawn).
+ * Auto-save a detected capture. Routes scripts to scripts.jsonl,
+ * everything else to research.jsonl.
  */
 function autoSaveCapture(projectRoot, capture) {
+  // Route scripts to the script library (returns null if trivial one-liner)
+  if (capture.type === "script" && capture.command) {
+    const saved = autoSaveScript(projectRoot, capture);
+    if (saved) return saved;
+    return null; // trivial command, not worth saving anywhere
+  }
+
+  // Original research save path
   const crypto = require("crypto");
   const researchPath = path.join(projectRoot, ".ai-memory", "research.jsonl");
+
+  // Dedup check: skip if similar entry already exists
+  try {
+    const existing = readJsonl(researchPath);
+    const similar = findSimilarEntry(existing, capture.topic, capture.tags);
+    if (similar) return similar; // already saved, return existing
+  } catch { /* non-critical — save anyway if dedup fails */ }
 
   const entry = {
     id: crypto.randomBytes(4).toString("hex"),
     ts: new Date().toISOString(),
     topic: capture.topic,
     tags: capture.tags,
-    finding: capture.finding,
+    finding: capture.finding || "",
     entities: [],
     related_to: [],
     source_tool: capture.source_tool || "auto-capture",
@@ -356,6 +438,48 @@ function autoSaveCapture(projectRoot, capture) {
   };
 
   appendJsonl(researchPath, entry);
+  return entry;
+}
+
+/**
+ * Auto-save a script to .ai-memory/scripts.jsonl with parameterization.
+ * Only saves scripts with real logic — skips trivial one-liners.
+ */
+function autoSaveScript(projectRoot, capture) {
+  // Filter out trivial one-liners that aren't worth saving
+  if (!isReusableScript(capture.command)) {
+    return null;
+  }
+
+  const crypto = require("crypto");
+  const { template, parameters } = parameterizeCommand(capture.command, capture.description);
+
+  // Dedup: if template already exists, just bump usage count
+  const existing = readScripts(projectRoot);
+  const duplicate = findDuplicateScript(existing, template);
+  if (duplicate) {
+    updateScript(projectRoot, duplicate.id, {
+      usage_count: (duplicate.usage_count || 1) + 1,
+      last_used: new Date().toISOString(),
+    });
+    return duplicate;
+  }
+
+  const entry = {
+    id: "scr_" + crypto.randomBytes(4).toString("hex"),
+    ts: new Date().toISOString(),
+    name: capture.topic || capture.description || "Untitled script",
+    description: capture.description || "",
+    tags: (capture.tags || []).filter(t => t !== "auto-capture" && t !== "script"),
+    template,
+    parameters,
+    original_command: capture.command,
+    usage_count: 1,
+    last_used: new Date().toISOString(),
+    source: "auto-capture",
+  };
+
+  appendScript(projectRoot, entry);
   return entry;
 }
 
@@ -481,12 +605,574 @@ function searchExplorations(projectRoot, query) {
   })).filter(r => r.entry);
 }
 
+// ── Script Library ──
+
+const SCRIPTS_FILE = "scripts.jsonl";
+
+/**
+ * Determine if a command is a reusable script worth saving.
+ * Filters out trivial one-liners (cat, grep, ls, find, head, tail, sed, etc.)
+ * that Claude can generate on-the-fly with its standard tools.
+ *
+ * A reusable script has REAL LOGIC: multi-step pipelines, authentication,
+ * loops, API calls with structured payloads, data processing chains.
+ */
+function isReusableScript(command) {
+  if (!command) return false;
+  const cmd = command.trim();
+
+  // Must have meaningful length — short commands are never reusable scripts
+  if (cmd.length < 100) return false;
+
+  // Positive signals: real script patterns
+  const SCRIPT_PATTERNS = [
+    /\bTOKEN\s*=\s*\$\(/,              // authentication token retrieval
+    /\bBearer\b/,                       // bearer auth
+    /\baz\s+account\b/,                // Azure CLI auth
+    /\bcurl\s.*-X\s*(POST|PUT|PATCH)/i, // HTTP mutations (not just GET)
+    /\bfor\s+\w+\s+in\b/,              // for loops
+    /\bwhile\b/,                        // while loops
+    /\bif\s*\[/,                        // conditionals
+    /\bnode\s+-e\s*"/,                  // inline Node.js scripts
+    /\bpython[3]?\s+-[ce]\s/,          // inline Python scripts
+    /process\.stdin/,                   // stdin processing (data pipelines)
+    /-d\s*'\{/,                         // JSON payloads in curl
+    /-d\s*'\[/,                         // JSON array payloads
+    /\|\s*node\b/,                      // piping to node
+    /\|\s*python/,                      // piping to python
+  ];
+  if (SCRIPT_PATTERNS.some(p => p.test(cmd))) return true;
+
+  // Multi-statement commands (&&, ||, ;) with curl or API calls
+  const statements = cmd.split(/\s*&&\s*|\s*\|\|\s*|\s*;\s*/).filter(s => s.trim().length > 10);
+  if (statements.length >= 2 && /\bcurl\b/.test(cmd)) return true;
+
+  // Negative signals: general-purpose one-liners Claude can always generate
+  const TRIVIAL_PATTERNS = [
+    /^\s*cat\s/,                // cat file
+    /^\s*head\s/,               // head file
+    /^\s*tail\s/,               // tail file
+    /^\s*sed\s/,                // sed on file
+    /^\s*awk\s/,                // awk on file
+    /^\s*grep\s/,               // grep pattern
+    /^\s*rg\s/,                 // ripgrep
+    /^\s*find\s/,               // find files
+    /^\s*ls\s/,                 // list files
+    /^\s*wc\s/,                 // word count
+    /^\s*diff\s/,               // diff files
+    /^\s*sort\s/,               // sort
+    /^\s*uniq\s/,               // unique
+    /^\s*echo\s/,               // echo
+    /^\s*pwd\s*$/,              // pwd
+    /^\s*which\s/,              // which
+    /^\s*type\s/,               // type
+    /^\s*file\s/,               // file type
+    /^\s*stat\s/,               // file stats
+    /^\s*du\s/,                 // disk usage
+    /^\s*test\s/,               // test conditionals
+    /^\s*\[\s/,                 // test bracket
+    /^\s*powershell\s+-Command\s+"Get-Content/,  // simple PS file read
+  ];
+  if (TRIVIAL_PATTERNS.some(p => p.test(cmd))) return false;
+
+  // Simple pipes to basic tools (cat file | grep | head) are not reusable
+  if (/^\s*(cat|head|tail|grep|find|ls)\s/.test(cmd) && cmd.split("|").length <= 3) return false;
+
+  // curl GET without auth or complex processing — borderline, allow if long enough
+  if (/^\s*curl\s/.test(cmd) && cmd.length >= 150) return true;
+
+  // Default: only save if it has multiple statements or is sufficiently complex
+  return statements.length >= 2 && cmd.length >= 120;
+}
+
+/**
+ * Detect and replace variable parts of a command with {{param}} placeholders.
+ * Returns: { template: string, parameters: [{name, description, default}] }
+ */
+function parameterizeCommand(command, description) {
+  const params = [];
+  let template = command;
+  const usedNames = new Set();
+
+  function addParam(name, desc, defaultVal) {
+    let finalName = name;
+    let suffix = 2;
+    while (usedNames.has(finalName)) {
+      finalName = `${name}_${suffix++}`;
+    }
+    usedNames.add(finalName);
+    params.push({ name: finalName, description: desc, default: defaultVal });
+    return `{{${finalName}}}`;
+  }
+
+  // 1. UUIDs — context-aware naming from preceding URL path
+  template = template.replace(
+    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/gi,
+    (match, uuid, offset) => {
+      const preceding = template.substring(Math.max(0, offset - 50), offset);
+      let name = "uuid";
+      if (/repositor(y|ies)\/?$/i.test(preceding)) name = "repo_id";
+      else if (/projects?\/?$/i.test(preceding)) name = "project_id";
+      else if (/builds?\/?$/i.test(preceding)) name = "build_id";
+      else if (/pullrequests?\/?$/i.test(preceding)) name = "pr_id";
+      else if (/--resource\s+$/i.test(preceding)) name = "resource_id";
+      return addParam(name, name.replace(/_/g, " "), uuid);
+    }
+  );
+
+  // 2. Numeric IDs in URL paths: /builds/12345, /logs/402, /runs/99
+  template = template.replace(
+    /\/(builds|logs|runs|pullrequests|workitems|iterations)\/(\d+)/gi,
+    (match, resource, id) => {
+      const singular = resource.replace(/s$/i, "");
+      const name = `${singular}_id`;
+      return `/${resource}/${addParam(name, `${singular} ID`, id)}`;
+    }
+  );
+
+  // 3. Absolute file paths in double quotes (Windows and Unix)
+  template = template.replace(
+    /"([A-Z]:\\[^"]{10,})"/g,
+    (match, winPath) => {
+      if (winPath.includes("project-memory/scripts/") || winPath.includes("project-memory\\scripts\\")) return match;
+      return `"${addParam("file_path", "file path", winPath)}"`;
+    }
+  );
+  template = template.replace(
+    /"(\/(?:tmp|home|var|usr|opt)\/[^"]{10,})"/g,
+    (match, unixPath) => {
+      return `"${addParam("file_path", "file path", unixPath)}"`;
+    }
+  );
+
+  // 4. JSON body variable string values (titles, descriptions in POST bodies)
+  template = template.replace(
+    /"(title|description|name|message|value)":\s*"([^"]{20,})"/gi,
+    (match, key, value) => {
+      return `"${key}": "${addParam(key, `${key} text`, value)}"`;
+    }
+  );
+
+  return { template, parameters: params };
+}
+
+/**
+ * Normalize a template for dedup comparison.
+ * Collapses whitespace and replaces param names with a generic placeholder.
+ */
+function normalizeTemplate(template) {
+  return template
+    .replace(/\s+/g, " ")
+    .replace(/\{\{[^}]+\}\}/g, "{{PARAM}}")
+    .trim();
+}
+
+/**
+ * Extract structural skeleton of a script for grouping near-duplicates.
+ * Strips params, JSON payloads, specific URLs — keeps tool + flags + structure.
+ * Scripts with the same skeleton are "the same template with different endpoints".
+ */
+function extractScriptSkeleton(template) {
+  return (template || "")
+    .replace(/\{\{[^}]+\}\}/g, "X")          // params → X
+    .replace(/"[^"]{30,}"/g, '"..."')          // long strings → "..."
+    .replace(/\{[^}]{50,}\}/g, "{...}")        // long JSON bodies → {...}
+    .replace(/https?:\/\/[^\s"]+/g, "URL")     // URLs → URL
+    .replace(/[0-9a-f]{8,}/gi, "HEX")         // hex strings → HEX
+    .replace(/\d{5,}/g, "NUM")                 // long numbers → NUM
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 200); // cap for comparison
+}
+
+/**
+ * Group scripts by structural skeleton.
+ * Returns: [{ skeleton, scripts: [...], totalUsage }] sorted by totalUsage desc.
+ */
+function groupScriptsByTemplate(scripts) {
+  const groups = {};
+  for (const s of scripts) {
+    const skeleton = extractScriptSkeleton(s.template);
+    if (!groups[skeleton]) groups[skeleton] = { skeleton, scripts: [], totalUsage: 0 };
+    groups[skeleton].scripts.push(s);
+    groups[skeleton].totalUsage += (s.usage_count || 1);
+  }
+  return Object.values(groups).sort((a, b) => b.totalUsage - a.totalUsage);
+}
+
+/**
+ * Find an existing script with the same template (after normalization).
+ */
+function findDuplicateScript(scripts, newTemplate) {
+  const normalized = normalizeTemplate(newTemplate);
+  for (const script of scripts) {
+    if (normalizeTemplate(script.template) === normalized) {
+      return script;
+    }
+  }
+  return null;
+}
+
+function readScripts(projectRoot) {
+  return readJsonl(path.join(projectRoot, ".ai-memory", SCRIPTS_FILE));
+}
+
+function appendScript(projectRoot, entry) {
+  appendJsonl(path.join(projectRoot, ".ai-memory", SCRIPTS_FILE), entry);
+}
+
+/**
+ * Update a script entry by ID (rewrites file).
+ */
+function updateScript(projectRoot, scriptId, updates) {
+  const scriptsPath = path.join(projectRoot, ".ai-memory", SCRIPTS_FILE);
+  const scripts = readJsonl(scriptsPath);
+  const updated = scripts.map(s => {
+    if (s.id === scriptId) return { ...s, ...updates };
+    return s;
+  });
+  fs.writeFileSync(scriptsPath, updated.map(s => JSON.stringify(s)).join("\n") + "\n", "utf-8");
+}
+
+/**
+ * Search scripts library by BM25 on name + description + tags.
+ * Returns: [{ docId, score, script }]
+ */
+function searchScripts(projectRoot, query) {
+  const scripts = readScripts(projectRoot);
+  if (scripts.length === 0) return [];
+
+  const searchable = scripts.map(s => ({
+    id: s.id,
+    topic: s.name || "",
+    tags: s.tags || [],
+    finding: [s.name || "", s.description || "", (s.tags || []).join(" ")].join(" "),
+  }));
+
+  const index = buildBM25Index(searchable);
+  const results = bm25Score(query, index);
+
+  const scriptMap = {};
+  for (const s of scripts) scriptMap[s.id] = s;
+
+  return results.map(r => ({
+    ...r,
+    script: scriptMap[r.docId],
+  })).filter(r => r.script);
+}
+
+// ── Hook Shared Functions ──
+// Previously duplicated across pre-tool-use.js, post-tool-use.js, session-start.js
+
+// ANSI color constants
+const ANSI = {
+  M: "\x1b[95m",  // bright magenta
+  B: "\x1b[1m",   // bold
+  R: "\x1b[0m",   // reset
+  G: "\x1b[92m",  // bright green
+  Y: "\x1b[93m",  // bright yellow
+  C: "\x1b[96m",  // bright cyan
+  D: "\x1b[2m",   // dim
+};
+
+// Hook constants
+const MATCHED_TOOLS = new Set(["Bash", "WebFetch", "WebSearch", "Task"]);
+const LIGHTWEIGHT_TOOLS = new Set(["Read", "Grep", "Glob"]);
+const IMMEDIATE_SAVE_TOOLS = new Set(["Task", "WebSearch", "WebFetch"]);
+const TASK_TOOLS = new Set(["TaskCreate", "TaskUpdate"]);
+const EXPLORATION_SUBAGENTS = new Set(["Explore", "Plan", "general-purpose", "feature-dev:code-explorer", "feature-dev:code-architect"]);
+const ESCALATION_THRESHOLD = 2;
+const THROTTLE_MS = 3 * 60 * 1000;
+const MEMORY_CHECK_TTL_MS = 2 * 60 * 1000;
+const SUMMARY_CHECKPOINT_CALLS = 40;
+
+/**
+ * Debug logging for hooks.
+ * @param {string} projectRoot - project root path (can be null)
+ * @param {string} prefix - "PRE" or "POST" or "START"
+ * @param {string} msg - log message
+ */
+function debugLog(projectRoot, prefix, msg) {
+  try {
+    const logPath = projectRoot
+      ? path.join(projectRoot, ".ai-memory", ".hook-debug.log")
+      : path.join(process.env.USERPROFILE || process.env.HOME || "/tmp", ".hook-debug.log");
+    const ts = new Date().toISOString();
+    fs.appendFileSync(logPath, `[${ts}] ${prefix}: ${msg}\n`, "utf-8");
+  } catch { /* non-critical */ }
+}
+
+/**
+ * Resolve project root for hooks (differs from script resolveProjectRoot by accepting cwd+sessionId).
+ */
+function resolveHookProjectRoot(cwd, sessionId) {
+  // Fast path: walk up from cwd (works when cwd is inside project)
+  const root = findProjectRoot(cwd);
+  if (root) return root;
+
+  // Session registry: written by session-start, avoids filesystem scan
+  if (sessionId) {
+    try {
+      const sessFile = path.join(
+        process.env.USERPROFILE || process.env.HOME || "/tmp",
+        ".ai-memory-sessions",
+        sessionId
+      );
+      const savedRoot = fs.readFileSync(sessFile, "utf-8").trim();
+      if (savedRoot && fs.existsSync(path.join(savedRoot, ".ai-memory"))) {
+        return savedRoot;
+      }
+    } catch { /* not found */ }
+  }
+
+  // Cached project root from session state (avoids expensive scanHomeForProjects)
+  const home = process.env.USERPROFILE || process.env.HOME || "";
+  const cachedStatePath = path.join(home, ".ai-memory-cached-root");
+  try {
+    const cached = fs.readFileSync(cachedStatePath, "utf-8").trim();
+    if (cached && fs.existsSync(path.join(cached, ".ai-memory"))) {
+      return cached;
+    }
+  } catch {}
+
+  // Expensive fallback: scan USERPROFILE children
+  const scanned = scanHomeForProjects();
+  if (scanned) {
+    // Cache for future hook calls in this session
+    try { fs.writeFileSync(cachedStatePath, scanned, "utf-8"); } catch {}
+  }
+  return scanned;
+}
+
+/**
+ * Check if a Bash command is a save/check-memory self-call.
+ */
+function isSelfCall(input) {
+  if (!input || !input.tool_input) return false;
+  const cmd = input.tool_input.command || "";
+  return (
+    cmd.includes("save-decision") ||
+    cmd.includes("save-research") ||
+    cmd.includes("check-memory") ||
+    cmd.includes("session-summary")
+  );
+}
+
+// ── Intent Detection ──
+
+const EXPLORATION_KEYWORDS = [
+  /\bsearch/i, /\binvestigat/i, /\bexplor/i, /\bexamin/i,
+  /\binspect/i, /\bunderstand/i, /\banalyz/i, /\bresearch/i,
+  /\bdebug/i, /\btrac(e|ing)\b/i, /\blook\s*(for|at|into|up)\b/i,
+  /\bfind\s+(out|where|how|what|why)\b/i, /\bidentif/i,
+  /\bdetermin/i, /\bfigure\s+out/i, /\bbrows/i, /\bscan/i,
+  /\bcheck\s+(if|whether|what|how|where|content)/i,
+  /\bwhat\s+(is|are|does)/i, /\bhow\s+(does|do|is|to)/i,
+  /\bwhere\s+(is|are|does)/i, /\blist\s+(all|the|every|content)/i,
+  /\bshow\s+(the|all|me|current)/i, /\bread\b/i, /\bview/i,
+];
+
+const OPERATIONAL_KEYWORDS = [
+  /\bcreat/i, /\bbuild/i, /\brebuild/i, /\binstall/i, /\brun\b/i,
+  /\bstart/i, /\bdeploy/i, /\bpush/i, /\bcommit/i,
+  /\bcompil/i, /\btest/i, /\bserv/i, /\bclean/i,
+  /\bdelet/i, /\bmov/i, /\bcopy/i, /\brenam/i,
+  /\bset\s*up/i, /\bconfigur/i, /\binitializ/i, /\bgenerat/i,
+  /\bwrit/i, /\bmak/i, /\bupdat/i, /\bfix/i,
+  /\bapply/i, /\bexecut/i, /\blaunch/i, /\brestart/i,
+  /\bstop\b/i, /\bkill/i, /\bformat/i, /\blint/i,
+  /\bpropagate/i, /\bcopy.*to\b/i, /\bsync/i,
+];
+
+const SAFE_OPERATIONAL_PATTERNS = [
+  /^\s*mkdir\b/,
+  /^\s*touch\b/,
+  /^\s*cp\b/,
+  /^\s*mv\b/,
+  /^\s*rm\b/,
+  /^\s*chmod\b/,
+  /^\s*chown\b/,
+  /^\s*ln\b/,
+  /^\s*echo\b/,
+  /^\s*printf\b/,
+  /^\s*cat\s*>/,
+  /^\s*npm\s+(install|ci|run|start|build|test)\b/,
+  /^\s*npx\b/,
+  /^\s*node\s+[^-]/,
+  /^\s*git\s+(add|commit|push|pull|checkout|switch|branch|merge|rebase|stash|tag|fetch|clone|init)\b/,
+  /^\s*pip\s+install\b/,
+  /^\s*docker\s+(build|run|push|pull|start|stop|rm|exec)\b/,
+  /^\s*cd\b/,
+  /^\s*pwd\b/,
+  /^\s*curl\s.*-X\s*(POST|PUT|PATCH|DELETE)\b/i,  // HTTP mutations are operational
+];
+
+const EXPLORATION_PATTERNS = [
+  /\bcurl\s/,
+  /\bwget\s/,
+  /\bgit\s+log\b/,
+  /\bgit\s+show\b/,
+  /\bgit\s+blame\b/,
+  /\bgrep\s/,
+  /\brg\s/,
+  /\bag\s/,
+  /\back\s/,
+  /\blocate\s/,
+  /\bnpm\s+(info|search|view)\b/,
+  /\bpip\s+(show|search)\b/,
+];
+
+const RESEARCH_COMMAND_PATTERNS = [
+  /\bwget\s/,
+  /\|\s*(python|python3|node|jq|grep|awk|sed)\b/,
+  /\bgit\s+(log|show|blame|diff)\b/,
+  /\bgrep\b/,
+  /\brg\s/,
+  /\bfind\s/,
+  /\btail\s/,
+  /\bcat\s+[^>]/,
+  /\bhead\s/,
+  /\bwc\s/,
+  /api-version=/,
+  /localhost:\d+/,
+];
+
+/**
+ * Layered intent detection for Bash commands.
+ */
+function isExploratoryBash(input) {
+  if (!input || !input.tool_input) return false;
+  const cmd = input.tool_input.command || "";
+  const desc = (input.tool_input.description || "");
+
+  // Layer 0: Safelist — obviously operational commands
+  if (SAFE_OPERATIONAL_PATTERNS.some(p => p.test(cmd))) return false;
+
+  // Layer 1: Command structure — but exclude curl POST/PUT/PATCH/DELETE (operational mutations)
+  if (/\bcurl\s/.test(cmd) && /\b-X\s*(POST|PUT|PATCH|DELETE)\b/i.test(cmd)) {
+    // curl mutation — operational, not research
+  } else if (RESEARCH_COMMAND_PATTERNS.some(p => p.test(cmd))) {
+    return true;
+  }
+
+  // Layer 2: Description keyword scoring
+  if (desc.length > 5) {
+    const explorationScore = EXPLORATION_KEYWORDS.filter(p => p.test(desc)).length;
+    const operationalScore = OPERATIONAL_KEYWORDS.filter(p => p.test(desc)).length;
+    if (explorationScore > operationalScore) return true;
+    if (operationalScore > explorationScore) return false;
+  }
+
+  // Layer 3: Command regex fallback
+  return EXPLORATION_PATTERNS.some(p => p.test(cmd));
+}
+
+function isExploratoryTask(input) {
+  const subagentType = (input.tool_input || {}).subagent_type || "";
+  return EXPLORATION_SUBAGENTS.has(subagentType);
+}
+
+// ── Session State Management ──
+
+const SESSION_STATE_FILE = ".session-state.json";
+const SESSION_STATE_VERSION = 1;
+
+function getDefaultSessionState() {
+  return {
+    version: SESSION_STATE_VERSION,
+    sessionId: "",
+    startTs: Date.now(),
+    reminder: { ts: 0, reminderCount: 0, lastSaveTs: 0 },
+    memoryCheck: { lastCheckTs: 0 },
+    taskTracker: { created: 0, completed: 0, toolCallsSinceSummary: 0 },
+    cacheHits: [],
+    lastInjection: { ts: 0, query: "" },
+    hookTimings: [],
+  };
+}
+
+function readSessionState(projectRoot) {
+  const statePath = path.join(projectRoot, ".ai-memory", SESSION_STATE_FILE);
+  const defaults = getDefaultSessionState();
+  try {
+    const raw = fs.readFileSync(statePath, "utf-8").trim();
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    if (parsed.version !== SESSION_STATE_VERSION) return defaults;
+    // Deep merge with defaults to fill missing fields
+    return {
+      ...defaults,
+      ...parsed,
+      reminder: { ...defaults.reminder, ...(parsed.reminder || {}) },
+      memoryCheck: { ...defaults.memoryCheck, ...(parsed.memoryCheck || {}) },
+      taskTracker: { ...defaults.taskTracker, ...(parsed.taskTracker || {}) },
+      lastInjection: { ...defaults.lastInjection, ...(parsed.lastInjection || {}) },
+    };
+  } catch {
+    return defaults;
+  }
+}
+
+function writeSessionState(projectRoot, state) {
+  const statePath = path.join(projectRoot, ".ai-memory", SESSION_STATE_FILE);
+  try {
+    fs.writeFileSync(statePath, JSON.stringify(state), "utf-8");
+  } catch { /* non-critical */ }
+}
+
+/**
+ * Check if research.jsonl has any entries (fast stat check).
+ */
+function hasResearch(projectRoot) {
+  try {
+    const stat = fs.statSync(path.join(projectRoot, ".ai-memory", "research.jsonl"));
+    return stat.size > 50;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get the most recent mtime of decisions.jsonl and research.jsonl.
+ */
+function getLastSaveTs(projectRoot) {
+  let maxMtime = 0;
+  for (const file of ["decisions.jsonl", "research.jsonl"]) {
+    try {
+      const stat = fs.statSync(path.join(projectRoot, ".ai-memory", file));
+      if (stat.mtimeMs > maxMtime) maxMtime = stat.mtimeMs;
+    } catch {}
+  }
+  return maxMtime;
+}
+
+/**
+ * Search past explorations and format for hook injection.
+ */
+function searchExplorationsForHook(projectRoot, query) {
+  const results = searchExplorations(projectRoot, query);
+  const hits = results.filter(r => r.score > 0.5).slice(0, 3);
+  if (hits.length === 0) return [];
+
+  const explorationsDir = path.join(projectRoot, ".ai-memory", "explorations");
+  return hits.map(h => {
+    const entry = h.entry;
+    return {
+      agent: entry.agent || "unknown",
+      date: entry.ts ? entry.ts.substring(0, 10) : "unknown",
+      charCount: entry.charCount || 0,
+      query: (entry.query || "").slice(0, 150),
+      filePath: path.join(explorationsDir, entry.filename).replace(/\\/g, "/"),
+    };
+  });
+}
+
 module.exports = {
   findProjectRoot, scanHomeForProjects, resolveProjectRoot,
   readJsonl, appendJsonl, tokenize,
   readEntityIndex, writeEntityIndex, addToEntityIndex,
   appendBreadcrumb, readExplorationLog, clearExplorationLog, getUnsavedBreadcrumbs, EXPLORATION_LOG_FILE,
-  buildBM25Index, bm25Score,
+  buildBM25Index, bm25Score, buildAndCacheBM25, loadCachedBM25, invalidateBM25Cache,
   findSimilarEntry,
   appendToolHistory, readToolHistory, clearToolHistory, detectAutoCapture, autoSaveCapture, extractCommandTags,
   TOOL_HISTORY_FILE,
@@ -494,4 +1180,15 @@ module.exports = {
   ensureExplorationsDir, readExplorationsIndex, appendExplorationIndex,
   extractFilePathsFromText, sanitizeFilename, extractTagsFromPrompt, searchExplorations,
   EXPLORATIONS_DIR, EXPLORATIONS_INDEX,
+  // Script library
+  isReusableScript, parameterizeCommand, normalizeTemplate, extractScriptSkeleton, groupScriptsByTemplate, findDuplicateScript,
+  readScripts, appendScript, updateScript, searchScripts,
+  SCRIPTS_FILE,
+  // Hook shared functions
+  ANSI, MATCHED_TOOLS, LIGHTWEIGHT_TOOLS, IMMEDIATE_SAVE_TOOLS, TASK_TOOLS,
+  EXPLORATION_SUBAGENTS, ESCALATION_THRESHOLD, THROTTLE_MS, MEMORY_CHECK_TTL_MS, SUMMARY_CHECKPOINT_CALLS,
+  debugLog, resolveHookProjectRoot, isSelfCall,
+  isExploratoryBash, isExploratoryTask,
+  SESSION_STATE_FILE, SESSION_STATE_VERSION, getDefaultSessionState, readSessionState, writeSessionState,
+  hasResearch, getLastSaveTs, searchExplorationsForHook,
 };
