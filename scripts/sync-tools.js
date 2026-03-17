@@ -272,14 +272,15 @@ ${CLAUDE_MARKER_END}`;
 }
 
 const STALENESS_DAYS = 7; // Research older than this is considered stale
+const MAX_RESEARCH_CHARS = 12000; // ~3K tokens budget for research in CLAUDE.md
 
 /**
  * Format research as a list with full findings, filtered by staleness.
- * No truncation — Claude gets complete finding content.
- * Returns { text, freshCount, staleCount }.
+ * Caps output at MAX_RESEARCH_CHARS to prevent CLAUDE.md from exceeding token limits.
+ * Returns { text, freshCount, staleCount, truncatedCount }.
  */
 function formatResearchFindingsList(research) {
-  if (research.length === 0) return { text: "", freshCount: 0, staleCount: 0 };
+  if (research.length === 0) return { text: "", freshCount: 0, staleCount: 0, truncatedCount: 0 };
 
   const cutoff = new Date(Date.now() - STALENESS_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const fresh = [];
@@ -294,13 +295,22 @@ function formatResearchFindingsList(research) {
 
   fresh.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
 
-  const lines = fresh.map((r) => {
+  const lines = [];
+  let totalChars = 0;
+  let truncatedCount = 0;
+  for (const r of fresh) {
     const staleness = r.staleness || "stable";
     const badge = staleness === "stable" ? "" : ` [${staleness}]`;
-    return `- **${r.topic || "untitled"}**${badge}: ${r.finding || ""}`;
-  });
+    const line = `- **${r.topic || "untitled"}**${badge}: ${r.finding || ""}`;
+    if (totalChars + line.length > MAX_RESEARCH_CHARS) {
+      truncatedCount = fresh.length - lines.length;
+      break;
+    }
+    lines.push(line);
+    totalChars += line.length + 1; // +1 for newline
+  }
 
-  return { text: lines.join("\n"), freshCount: fresh.length, staleCount: stale.length };
+  return { text: lines.join("\n"), freshCount: fresh.length, staleCount: stale.length, truncatedCount };
 }
 
 function generateClaudeResearchSection(research) {
@@ -310,12 +320,19 @@ function generateClaudeResearchSection(research) {
 
 `;
   if (research.length > 0) {
-    const { text: findingsList, freshCount, staleCount } = formatResearchFindingsList(research);
+    const { text: findingsList, freshCount, staleCount, truncatedCount } = formatResearchFindingsList(research);
+    const shownCount = freshCount - truncatedCount;
 
-    if (freshCount > 0) {
-      content += `${freshCount} research findings loaded (full content). **USE these — do NOT re-investigate:**
+    if (shownCount > 0) {
+      content += `${shownCount} of ${freshCount} recent findings shown. **USE these — do NOT re-investigate:**
 
 ${findingsList}
+
+`;
+    }
+
+    if (truncatedCount > 0) {
+      content += `_(${truncatedCount} more recent findings omitted for size. Run \`check-memory.js\` to search all.)_
 
 `;
     }
@@ -326,7 +343,7 @@ ${findingsList}
 `;
     }
 
-    if (freshCount === 0 && staleCount > 0) {
+    if (shownCount === 0 && staleCount > 0) {
       content += `_All ${staleCount} findings are older than ${STALENESS_DAYS} days. Run check-memory.js to search them._
 
 `;
