@@ -272,6 +272,26 @@ Generates instruction files for **Claude Code** (`CLAUDE.md`), **GitHub Copilot*
 
 ## Installation
 
+### Automated (recommended)
+
+```bash
+git clone https://github.com/sunil-goyal-1502/project-memory.git
+cd project-memory
+python install.py
+```
+
+This single command handles everything: npm install, plugin registration, hooks, MCP server, memory initialization, and code graph build. Works on Windows, macOS, and Linux with Python 3.6+ (no pip dependencies).
+
+To uninstall:
+```bash
+python install.py --uninstall
+```
+
+### Manual Installation
+
+<details>
+<summary>Click to expand manual steps</summary>
+
 ### Step 1: Clone and Install
 
 ```bash
@@ -398,6 +418,8 @@ Close and reopen Claude Code. You should see:
 - Session-start message with loaded decisions/research counts
 - 11 MCP tools available as `mcp__project-memory__*`
 - The daemon auto-started
+
+</details>
 
 ## Verify Installation
 
