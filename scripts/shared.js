@@ -1378,6 +1378,93 @@ function matchOrCreateCandidate(projectRoot, chain, sessionId) {
   return newCandidate;
 }
 
+// ── MCP Hint Generation ──
+
+/**
+ * Generate _hints for an MCP tool response.
+ * Guides Claude to the right follow-up tool based on current results.
+ */
+function generateHints(toolName, result, sessionState) {
+  const hints = { next_steps: [], related: [], warnings: [] };
+
+  if (toolName === "code_search" && result.data && result.data.length > 0) {
+    const first = result.data[0];
+    hints.next_steps.push(
+      { tool: "code_context", suggestion: `Get callers/callees of ${first.qualified_name || first.name}` },
+      { tool: "code_impact", suggestion: `Check blast radius of changes to ${first.name}` }
+    );
+    hints.related = result.data.slice(0, 5).map(n => n.file_path).filter(Boolean);
+  } else if (toolName === "code_context") {
+    if (result.callers && result.callers.length > 0) {
+      hints.next_steps.push({ tool: "code_impact", suggestion: "Analyze blast radius" });
+    }
+    if (result.tests && result.tests.length === 0) {
+      hints.warnings.push("No tests found (TESTED_BY edges missing)");
+    }
+    hints.next_steps.push({ tool: "code_structure", suggestion: "See module hierarchy" });
+  } else if (toolName === "code_impact") {
+    hints.next_steps.push({ tool: "code_search", suggestion: "Search for related code" });
+  } else if (toolName === "memory_search") {
+    hints.next_steps.push(
+      { tool: "code_search", suggestion: "Search code graph for related entities" },
+      { tool: "script_search", suggestion: "Find reusable scripts" }
+    );
+  } else if (toolName === "get_context") {
+    hints.next_steps.push(
+      { tool: "memory_search", suggestion: "Search prior research/decisions" },
+      { tool: "code_search", suggestion: "Search code structure" }
+    );
+  }
+
+  // Suppress tools already called this session
+  if (sessionState && sessionState.toolsCalled) {
+    const recentTools = new Set(sessionState.toolsCalled.slice(-10).map(t => t.tool));
+    hints.next_steps = hints.next_steps.filter(s => !recentTools.has(s.tool));
+  }
+
+  return hints;
+}
+
+/**
+ * Format a compact MCP response with hints.
+ */
+function formatMCPResponse(toolName, status, summary, data, sessionState) {
+  const response = { status, summary };
+  if (data !== undefined) response.data = data;
+  response._hints = generateHints(toolName, { data, ...response }, sessionState);
+  return response;
+}
+
+// ── MCP Session State (in-memory, per-server-process) ──
+
+function createMCPSessionState() {
+  return {
+    toolsCalled: [],       // deque of last 20 {tool, ts}
+    entitiesQueried: new Set(),
+    filesExplored: new Set(),
+    inferredIntent: "exploring",
+  };
+}
+
+function recordMCPToolCall(sessionState, toolName, params) {
+  if (!sessionState) return;
+  sessionState.toolsCalled.push({ tool: toolName, ts: Date.now() });
+  if (sessionState.toolsCalled.length > 20) {
+    sessionState.toolsCalled.shift();
+  }
+  // Track queried entities
+  if (params) {
+    if (params.query) {
+      for (const word of tokenize(params.query)) {
+        sessionState.entitiesQueried.add(word);
+      }
+    }
+    if (params.qualified_name) {
+      sessionState.entitiesQueried.add(params.qualified_name);
+    }
+  }
+}
+
 module.exports = {
   findProjectRoot, scanHomeForProjects, resolveProjectRoot,
   readJsonl, appendJsonl, tokenize,
@@ -1408,4 +1495,6 @@ module.exports = {
   readWorkflowCandidates, appendWorkflowCandidate, updateWorkflowCandidate,
   matchOrCreateCandidate,
   WORKFLOW_CANDIDATES_FILE,
+  // MCP hints + session state
+  generateHints, formatMCPResponse, createMCPSessionState, recordMCPToolCall,
 };

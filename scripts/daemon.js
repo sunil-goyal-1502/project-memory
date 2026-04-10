@@ -67,6 +67,7 @@ function createEmptyProjectData(projectRoot) {
     explorations: [],
     config: {},
     watchersSetup: false,
+    sourceWatcher: null,
   };
 }
 
@@ -79,6 +80,7 @@ function getOrLoadProject(projectRoot) {
     projects.set(normalized, data);
     reloadProject(normalized, "all");
     setupProjectWatchers(normalized);
+    setupSourceWatcher(normalized);
   }
   return projects.get(normalized);
 }
@@ -143,6 +145,83 @@ function setupProjectWatchers(projectRoot) {
   watch("scripts.jsonl", "scripts");
   watch("graph.jsonl", "graph");
   watch(path.join("explorations", "explorations.jsonl"), "explorations");
+}
+
+// ── Source file watcher (incremental code graph updates) ──
+
+const SOURCE_SKIP_DIRS = new Set([
+  "node_modules", ".git", "bin", "obj", "dist", "build", ".vs",
+  "__pycache__", ".mypy_cache", ".pytest_cache", "venv", "env",
+  ".ai-memory", ".next", ".nuxt", "coverage", ".cache",
+  "packages", "TestResults",
+]);
+
+function setupSourceWatcher(projectRoot) {
+  const normalized = projectRoot.replace(/\\/g, "/").replace(/\/$/, "");
+  const data = projects.get(normalized);
+  if (!data || data.sourceWatcher) return;
+
+  const codeParserMod = require(path.join(__dirname, "code-parser.js"));
+  const codeGraphMod = require(path.join(__dirname, "code-graph.js"));
+  const crypto = require("crypto");
+  const supportedExts = new Set(Object.keys(codeParserMod.EXT_TO_LANG));
+
+  // Debounce: collect changed files, batch-process after 500ms of quiet
+  const pendingFiles = new Map(); // filePath -> timeoutId
+  let parserInitialized = false;
+
+  async function processFile(filePath) {
+    try {
+      if (!parserInitialized) {
+        await codeParserMod.init();
+        parserInitialized = true;
+      }
+      const content = fs.readFileSync(filePath, "utf-8");
+      const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+      const { nodes, edges } = await codeParserMod.parseFile(filePath, content);
+      for (const node of nodes) { if (node.kind === "File") node.file_hash = hash; }
+      const db = codeGraphMod.open(normalized);
+      codeGraphMod.replaceFile(db, filePath.replace(/\\/g, "/"), nodes, edges);
+      codeGraphMod.close(db);
+      logForProject(normalized, `SOURCE-WATCH-UPDATE: ${path.basename(filePath)} (+${nodes.length} nodes, +${edges.length} edges)`);
+    } catch (err) {
+      logForProject(normalized, `SOURCE-WATCH-ERROR: ${path.basename(filePath)}: ${err.message}`);
+    }
+  }
+
+  try {
+    const watcher = fs.watch(normalized, { recursive: true }, (eventType, filename) => {
+      if (!filename) return;
+
+      // Check extension
+      const ext = path.extname(filename).toLowerCase();
+      if (!supportedExts.has(ext)) return;
+
+      // Check skip dirs — filename is relative to watched root
+      const segments = filename.replace(/\\/g, "/").split("/");
+      for (const seg of segments) {
+        if (SOURCE_SKIP_DIRS.has(seg) || seg.startsWith(".")) return;
+      }
+
+      const fullPath = path.join(normalized, filename).replace(/\\/g, "/");
+
+      // Debounce: reset timer for this file
+      const existing = pendingFiles.get(fullPath);
+      if (existing) clearTimeout(existing);
+      pendingFiles.set(fullPath, setTimeout(() => {
+        pendingFiles.delete(fullPath);
+        // Only process if file still exists (not a delete event)
+        if (fs.existsSync(fullPath)) {
+          processFile(fullPath);
+        }
+      }, 500));
+    });
+
+    data.sourceWatcher = watcher;
+    logForProject(normalized, `SOURCE-WATCHER: watching ${normalized} for code changes`);
+  } catch (err) {
+    logForProject(normalized, `SOURCE-WATCHER-INIT-ERROR: ${err.message}`);
+  }
 }
 
 // ── BM25 search using in-memory index ──
@@ -219,218 +298,12 @@ function handlePreToolUse(projectRoot, input) {
   const data = getOrLoadProject(root);
   if (!data) return {};
 
-  // Lightweight tools: inject only, never block
-  if (LIGHTWEIGHT_TOOLS.has(input.tool_name)) {
-    const toolInput = input.tool_input || {};
-    const query = [toolInput.file_path || "", toolInput.pattern || "", toolInput.description || ""].join(" ").trim();
-    if (query.length > 5 && data.research.length > 0) {
-      const relevant = bm25Search(query, data.researchBM25, 0.5, 2);
-      if (relevant.length > 0) {
-        const researchMap = {}; for (const r of data.research) researchMap[r.id] = r;
-        const lines = [`${C}${B}★ Memory Context ───────────────────────────────${R}`];
-        for (const { docId } of relevant) {
-          const entry = researchMap[docId];
-          if (entry) lines.push(`${G}  • ${entry.topic || "untitled"}: ${(entry.finding || "").slice(0, 200)}${R}`);
-        }
-        lines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
-        return { systemMessage: lines.join("\n") };
-      }
-    }
-    return {};
-  }
-
+  // Skip lightweight tools and self-calls entirely
+  if (LIGHTWEIGHT_TOOLS.has(input.tool_name)) return {};
   if (!MATCHED_TOOLS.has(input.tool_name)) return {};
   if (input.tool_name === "Bash" && isSelfCall(input)) return {};
 
-  // Script search for ALL Bash commands (not just exploratory) — surface saved scripts
-  // before Claude writes a new one from scratch
-  if (input.tool_name === "Bash" && data.scriptBM25) {
-    const toolInput = input.tool_input || {};
-    const scriptQuery = [toolInput.command || "", toolInput.description || ""].join(" ").trim();
-    if (scriptQuery.length > 5) {
-      const scriptHits = bm25Search(scriptQuery, data.scriptBM25, 0.5, 2);
-      if (scriptHits.length > 0) {
-        const scriptMap = {}; for (const s of data.scripts) scriptMap[s.id] = s;
-        const lines = [];
-        lines.push(`${C}${B}★ REUSE THESE SCRIPTS — do NOT write new ones ──${R}`);
-        lines.push(`${Y}  IMPORTANT: These are complete, tested scripts. Use them AS-IS.${R}`);
-        lines.push(`${Y}  Only replace {{parameter}} placeholders with actual values.${R}`);
-        lines.push(``);
-        for (const { docId } of scriptHits) {
-          const script = scriptMap[docId];
-          if (!script) continue;
-          lines.push(`${G}${B}  ${script.name}${R} (used ${script.usage_count || 1}x)`);
-          if (script.parameters && script.parameters.length > 0) {
-            lines.push(`${Y}  Parameters to fill in:${R}`);
-            for (const p of script.parameters) {
-              lines.push(`${Y}    {{${p.name}}}: ${p.description} (default: ${p.default || "none"})${R}`);
-            }
-          }
-          lines.push(`${D}  ┌─ COMPLETE SCRIPT (copy-paste, replace {{params}}) ─┐${R}`);
-          lines.push(`${G}${script.template}${R}`);
-          lines.push(`${D}  └──────────────────────────────────────────────────┘${R}`);
-          lines.push(``);
-        }
-        lines.push(`${Y}${B}  ▶ DO NOT recreate these scripts. Copy above, replace {{params}}, run.${R}`);
-        lines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
-        return { systemMessage: lines.join("\n") };
-      }
-    }
-  }
-
-  const isExploratory = input.tool_name === "Bash" ? isExploratoryBash(input)
-    : input.tool_name === "Task" ? isExploratoryTask(input) : true;
-
-  if (!isExploratory) return {};
-
-  if (data.research.length === 0) return {};
-
-  const toolInput = input.tool_input || {};
-  const query = [toolInput.description || "", toolInput.prompt || "", toolInput.query || ""].join(" ").trim();
-  if (query.length <= 5) return {};
-
-  // BM25 search (in-memory, ~0ms)
-  let relevant = bm25Search(query, data.researchBM25, 0.5, 3);
-
-  // Graph expansion (in-memory adjacency, ~0ms)
-  if (data.config.graph?.enabled && relevant.length > 0) {
-    const researchLookup = {}; for (const r of data.research) researchLookup[r.id] = r;
-    const hitEntities = [];
-    for (const { docId } of relevant) {
-      const entry = researchLookup[docId];
-      if (entry?.entities) hitEntities.push(...entry.entities);
-    }
-    if (hitEntities.length > 0) {
-      const depth = data.config.graph?.hookExpansionDepth || 1;
-      const expanded = graphExpand(data.graphAdj, hitEntities, depth);
-      const existingIds = new Set(relevant.map(r => r.docId));
-      for (const findingId of expanded.relatedFindingIds) {
-        if (!existingIds.has(findingId) && researchLookup[findingId]) {
-          relevant.push({ docId: findingId, score: 0.3 });
-          existingIds.add(findingId);
-        }
-      }
-      const maxFindings = data.config.hooks?.maxInjectedFindings || 3;
-      relevant = relevant.slice(0, maxFindings + 2);
-    }
-  }
-
-  if (relevant.length > 0) {
-    const researchMap = {}; for (const r of data.research) researchMap[r.id] = r;
-    const lines = [];
-    lines.push(`${C}${B}★ Memory Cache Hit ─────────────────────────────${R}`);
-    lines.push(`${C}  ${relevant.length} saved finding(s) match your current task:${R}`);
-    lines.push(``);
-    for (let ri = 0; ri < relevant.length; ri++) {
-      const { docId, score } = relevant[ri];
-      const entry = researchMap[docId];
-      if (!entry) continue;
-      const sourceTag = score < 0.5 ? ` ${D}[via graph]${R}` : "";
-      const tags = (entry.tags || []).slice(0, 4).join(", ");
-      lines.push(`${G}${B}  ${ri + 1}. ${entry.topic || "untitled"}${R}${sourceTag}`);
-      if (tags) lines.push(`${D}     Tags: ${tags}${R}`);
-      lines.push(`${G}     ${entry.finding || ""}${R}`);
-      lines.push(``);
-    }
-    lines.push(`${Y}${B}  ▶ USE the findings above directly. Only re-explore if they are genuinely insufficient.${R}`);
-    lines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
-
-    // Explorations
-    const explorationHits = searchExplorationsForProject(data, query);
-    if (explorationHits.length > 0) {
-      lines.push(``);
-      lines.push(`${C}${B}★ Past Explorations Found ──────────────────────${R}`);
-      for (const hit of explorationHits) {
-        lines.push(`${G}${B}  • ${hit.agent} (${hit.date}) — ${hit.charCount} chars${R}`);
-        lines.push(`${D}    Query: ${hit.query}${R}`);
-        lines.push(`${G}    Full output: ${hit.filePath}${R}`);
-        lines.push(``);
-      }
-      lines.push(`${Y}${B}  ▶ Read the exploration file(s) above for complete context.${R}`);
-      lines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
-    }
-
-    // Scripts
-    const scriptResults = bm25Search(query, data.scriptBM25, 0.5, 2);
-    if (scriptResults.length > 0) {
-      const scriptMap = {}; for (const s of data.scripts) scriptMap[s.id] = s;
-      lines.push(``);
-      lines.push(`${C}${B}★ REUSE THESE SCRIPTS — do NOT write new ones ──${R}`);
-      lines.push(`${Y}  IMPORTANT: These are complete, tested scripts. Use them AS-IS.${R}`);
-      lines.push(`${Y}  Only replace {{parameter}} placeholders with actual values.${R}`);
-      lines.push(``);
-      for (const { docId } of scriptResults) {
-        const script = scriptMap[docId];
-        if (!script) continue;
-        lines.push(`${G}${B}  ${script.name}${R} (used ${script.usage_count || 1}x)`);
-        if (script.parameters && script.parameters.length > 0) {
-          lines.push(`${Y}  Parameters to fill in:${R}`);
-          for (const p of script.parameters) {
-            lines.push(`${Y}    {{${p.name}}}: ${p.description} (default: ${p.default || "none"})${R}`);
-          }
-        }
-        lines.push(`${D}  ┌─ COMPLETE SCRIPT (copy-paste, replace {{params}}) ─┐${R}`);
-        lines.push(`${G}${script.template}${R}`);
-        lines.push(`${D}  └──────────────────────────────────────────────────┘${R}`);
-        lines.push(``);
-      }
-      lines.push(`${Y}${B}  ▶ DO NOT recreate these scripts. Copy above, replace {{params}}, run.${R}`);
-      lines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
-    }
-
-    // Record injection for double-block prevention
-    try {
-      const state = readSessionState(root);
-      state.lastInjection = { ts: Date.now(), query: query.slice(0, 100) };
-      state.memoryCheck.lastCheckTs = Date.now();
-      writeSessionState(root, state);
-    } catch {}
-
-    return { systemMessage: lines.join("\n") };
-  }
-
-  // Cache miss — try explorations + scripts fallback
-  const fallbackLines = [];
-  const explorationHits = searchExplorationsForProject(data, query);
-  if (explorationHits.length > 0) {
-    fallbackLines.push(`${C}${B}★ Past Exploration Found ───────────────────────${R}`);
-    for (const hit of explorationHits) {
-      fallbackLines.push(`${G}${B}  • ${hit.agent} (${hit.date}) — ${hit.charCount} chars${R}`);
-      fallbackLines.push(`${D}    Query: ${hit.query}${R}`);
-      fallbackLines.push(`${G}    Full output: ${hit.filePath}${R}`);
-      fallbackLines.push(``);
-    }
-    fallbackLines.push(`${Y}${B}  ▶ Read the exploration file(s) above with the Read tool.${R}`);
-    fallbackLines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
-  }
-  const scriptResults = bm25Search(query, data.scriptBM25, 0.5, 2);
-  if (scriptResults.length > 0) {
-    const scriptMap = {}; for (const s of data.scripts) scriptMap[s.id] = s;
-    fallbackLines.push(``);
-    fallbackLines.push(`${C}${B}★ REUSE THESE SCRIPTS — do NOT write new ones ──${R}`);
-    fallbackLines.push(`${Y}  IMPORTANT: These are complete, tested scripts. Use them AS-IS.${R}`);
-    fallbackLines.push(``);
-    for (const { docId } of scriptResults) {
-      const script = scriptMap[docId];
-      if (!script) continue;
-      fallbackLines.push(`${G}${B}  ${script.name}${R} (used ${script.usage_count || 1}x)`);
-      if (script.parameters && script.parameters.length > 0) {
-        fallbackLines.push(`${Y}  Parameters to fill in:${R}`);
-        for (const p of script.parameters) {
-          fallbackLines.push(`${Y}    {{${p.name}}}: ${p.description} (default: ${p.default || "none"})${R}`);
-        }
-      }
-      fallbackLines.push(`${D}  ┌─ COMPLETE SCRIPT (copy-paste, replace {{params}}) ─┐${R}`);
-      fallbackLines.push(`${G}${script.template}${R}`);
-      fallbackLines.push(`${D}  └──────────────────────────────────────────────────┘${R}`);
-      fallbackLines.push(``);
-    }
-    fallbackLines.push(`${Y}${B}  ▶ DO NOT recreate. Copy above, replace {{params}}, run.${R}`);
-    fallbackLines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
-  }
-  if (fallbackLines.length > 0) return { systemMessage: fallbackLines.join("\n") };
-
-  // Escalation check
+  // Escalation check — deny if too many save reminders ignored
   const state = readSessionState(root);
   if (state.reminder.reminderCount > ESCALATION_THRESHOLD) {
     const currentSaveTs = getLastSaveTs(root);
@@ -443,6 +316,16 @@ function handlePreToolUse(projectRoot, input) {
         },
       };
     }
+  }
+
+  // Lightweight nudge for exploratory tools: suggest MCP tools instead
+  const isExploratory = input.tool_name === "Bash" ? isExploratoryBash(input)
+    : input.tool_name === "Task" ? isExploratoryTask(input) : false;
+
+  if (isExploratory && data.research.length > 0) {
+    return {
+      systemMessage: `${C}${B}★ TIP: Use MCP tools for faster context:${R}\n${G}  • mcp__project-memory__memory_search — prior research/decisions${R}\n${G}  • mcp__project-memory__code_search — code structure (FTS5)${R}\n${G}  • mcp__project-memory__script_search — reusable scripts${R}`,
+    };
   }
 
   return {};
@@ -484,6 +367,39 @@ function handlePostToolUse(projectRoot, input) {
         writeSessionState(root, state);
       }
     }
+  }
+
+  // Code graph incremental update after file modifications (Write, Edit)
+  if (input.tool_name === "Write" || input.tool_name === "Edit") {
+    try {
+      const toolInput = input.tool_input || {};
+      const filePath = toolInput.file_path;
+      if (filePath) {
+        const codeParserMod = require(path.join(__dirname, "code-parser.js"));
+        const codeGraphMod = require(path.join(__dirname, "code-graph.js"));
+        const ext = path.extname(filePath).toLowerCase();
+        if (codeParserMod.EXT_TO_LANG[ext]) {
+          // Async update — don't block the hook response
+          setImmediate(async () => {
+            try {
+              await codeParserMod.init();
+              const fs = require("fs");
+              const content = fs.readFileSync(filePath, "utf-8");
+              const { nodes, edges } = await codeParserMod.parseFile(filePath, content);
+              const crypto = require("crypto");
+              const hash = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+              for (const node of nodes) { if (node.kind === "File") node.file_hash = hash; }
+              const db = codeGraphMod.open(root);
+              codeGraphMod.replaceFile(db, filePath.replace(/\\/g, "/"), nodes, edges);
+              codeGraphMod.close(db);
+              logForProject(root, `CODE-GRAPH-UPDATE: ${path.basename(filePath)} (+${nodes.length} nodes, +${edges.length} edges)`);
+            } catch (err) {
+              logForProject(root, `CODE-GRAPH-UPDATE-ERROR: ${err.message}`);
+            }
+          });
+        }
+      }
+    } catch {}
   }
 
   if (!MATCHED_TOOLS.has(input.tool_name)) return {};
@@ -685,12 +601,15 @@ function startServer() {
   function cleanup() {
     try { fs.unlinkSync(portFile); } catch {}
     try { fs.unlinkSync(pidFile); } catch {}
-    // Unwatch all project files
+    // Unwatch all project files and source watchers
     for (const [, pData] of projects) {
       try {
         const files = ["research.jsonl", "scripts.jsonl", "graph.jsonl", path.join("explorations", "explorations.jsonl")];
         for (const f of files) {
           try { fs.unwatchFile(path.join(pData.memDir, f)); } catch {}
+        }
+        if (pData.sourceWatcher) {
+          try { pData.sourceWatcher.close(); } catch {}
         }
       } catch {}
     }

@@ -420,50 +420,36 @@ function generateClaudeScriptsSection(scripts) {
 function generateAutoSaveSection(pluginRoot) {
   const scriptPath = pluginRoot.replace(/\\/g, "/");
   return `${CLAUDE_AUTOSAVE_MARKER_START}
-## MANDATORY: Auto-Save Memory (do this throughout EVERY session)
+## Project Memory (MCP Tools)
 <!-- Auto-managed by project-memory plugin. Do not edit between markers. -->
 
-**You MUST save decisions and research automatically as you work. Do NOT wait to be asked.**
+**ALWAYS use these MCP tools instead of manual file exploration:**
 
-### IMMEDIATE save triggers (do NOT delay these):
-- After ANY codebase exploration (Task/Explore agent, reading multiple files for research)
-- After ANY web search or URL fetch
-- When the user gives an instruction, constraint, or asks you to remember something
-- When you discover API behavior, error causes, library quirks, or workarounds
+| When you want to... | Use this tool |
+|---------------------|---------------|
+| Start any task | \`mcp__project-memory__get_context\` (call FIRST) |
+| Find prior research/decisions | \`mcp__project-memory__memory_search\` |
+| Find a reusable script | \`mcp__project-memory__script_search\` |
+| Understand code structure | \`mcp__project-memory__code_search\` then \`code_context\` |
+| Check impact of a change | \`mcp__project-memory__code_impact\` |
+| Save a discovery | \`mcp__project-memory__memory_save\` |
+| End session | \`mcp__project-memory__session_summary\` |
 
-### Check memory FIRST — before exploring code, web searches, or any investigation:
+**IMPORTANT**: Call \`code_search\` or \`code_context\` BEFORE using Read/Grep/Glob.
+The code graph has structural knowledge that eliminates redundant file reads.
+
+### CLI fallbacks (if MCP unavailable):
 \`\`\`bash
 node "${scriptPath}/scripts/check-memory.js" "search keywords"
-\`\`\`
-If relevant info found, USE it directly — do NOT re-explore or re-investigate. Cite:
-> [project-memory] Using saved finding: "<topic>"
-
-### Save decisions — run this whenever a project decision is made:
-\`\`\`bash
+node "${scriptPath}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"
 node "${scriptPath}/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"
-\`\`\`
-Categories: architecture, constraint, convention, testing, scope, unresolved.
-Examples of decisions: tech stack choices, API design patterns, naming conventions, "X is out of scope", testing strategies, "must support Y".
-
-### Save research — save EACH FACT as a SEPARATE entry:
-\`\`\`bash
-node "${scriptPath}/scripts/save-research.js" "<topic>" "<tags>" "<finding>" [staleness] [--entities "File,Class,Method"]
-\`\`\`
-**ATOMIC FACTS**: Each save = ONE searchable fact (1-2 sentences). Never bundle multiple facts.
-- BAD: One 500-word entry about "Windows verification pipeline architecture"
-- GOOD: 4 entries: "DomService uses XPathDocument", "VerificationDetail has XmlQuery field", etc.
-- Use \`--entities\` with file/class/method names for better search indexing.
-
-**If in doubt, SAVE IT. Saving too much is better than losing knowledge.**
-
-### MANDATORY: End-of-Session Summary
-Before ending ANY session, you MUST run the session summary as your FINAL action:
-\`\`\`bash
 node "${scriptPath}/scripts/session-summary.js"
 \`\`\`
-- If it shows "PENDING SAVES DETECTED", save all pending research/decisions FIRST, then re-run
-- Do NOT end the session until the summary shows green (no pending saves)
-- This is NON-NEGOTIABLE — always run this before your final response
+
+### Auto-save rules:
+- **Decisions**: Save automatically via \`mcp__project-memory__memory_save\` (type=decision)
+- **Research**: Save automatically via \`mcp__project-memory__memory_save\` (type=research)
+- **Session end**: ALWAYS call \`mcp__project-memory__session_summary\` before final response
 ${CLAUDE_AUTOSAVE_MARKER_END}`;
 }
 

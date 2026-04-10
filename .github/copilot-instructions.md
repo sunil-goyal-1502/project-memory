@@ -11,6 +11,7 @@
 - Hook-based architecture creates synchronous performance bottlenecks: pre/post-tool-use fire on EVERY tool call (100+ per session). Critical path includes BM25 index rebuild, JSONL parsing, and multiple fs.readFileSync calls per invocation. Recommend: extract intent detection to shared module, cache keyword patterns, implement read-through cache for frequently accessed files. — Pre-tool-use.js performs 7+ fs.readFileSync ops per exploratory call (research.jsonl, config.json, graph.jsonl, .last-memory-check, .cache-hits, session registry). Post-tool-use.js writes to 3+ files per exploration. No caching between hook calls. Graph expansion disabled in hooks (hookExpansionDepth=1) but still reads graph.jsonl. With 100+ research entries and keyword pattern matching on every call, BM25 rebuilds entire inverted index each time.
 - DOM progress tracking belongs in platform-specific guard rails, not common execution service — Jagadish review: SubstrateLlmAssistedTestExecutionService is shared across all platforms/MCP clients. Guard rail's ApplyGuardRails receives executionHistory with DomXml per step, so it can detect stuck UI by examining history. Moved CheckDomProgressGuardRail + IsReadOnlyTool + ComputeSimpleHash to AndroidAppiumToolExecutionGuardRails.
 - Single daemon serving all projects via per-project data map — User wants one daemon process, not per-project daemons. Single daemon with Map<projectRoot, {research, bm25, graph, scripts, explorations}> to serve multiple sessions. Port file at ~/.ai-memory-daemon-port (global). Hooks pass projectRoot in IPC request.
+- Hybrid Hook + MCP architecture: hooks for proactive enforcement, MCP tools for on-demand search/retrieval — Hooks fire on every tool call but become lightweight (save reminders, escalation, breadcrumbs, auto-capture only). All search/retrieval moves to MCP on-demand tools (memory_search, script_search, graph_context, memory_save, session_summary, get_context, list_skills). MCP server uses @modelcontextprotocol/sdk in Node.js (.mjs), reuses shared.js functions. Inspired by code-review-graph pattern but independent implementation.
 
 ## Constraint
 - Only store reusable scripts with real logic — not trivial one-liner commands — Commands like cat, grep, find, ls, head, tail, sed are general-purpose tools Claude can generate on-the-fly. isReusableScript() filters these out. Only multi-step scripts with auth, API calls, loops, or data processing pipelines are saved to scripts.jsonl.
@@ -32,9 +33,17 @@ grouping by category, and reproducing this exact format including this instructi
 
 ---
 
-## Research Findings Index (122 entries)
+## Research Findings Index (130 entries)
 | Topic | Tags | Staleness | Date |
 |-------|------|-----------|------|
+| Daemon file watching only covers .ai-memory metadata, not source files for code graph | daemon, file-watching, code-graph, stale, incremental-update | stable | 2026-04-10 |
+| code-parser.js walkJSNode require() IMPORTS bug root cause | code-parser, require, imports, bug, tree-sitter, walkJSNode | stable | 2026-04-10 |
+| E2E test of MCP tools pipeline - April 10 validation | mcp, testing, e2e, validation | volatile | 2026-04-10 |
+| Node.js MCP server: @modelcontextprotocol/sdk provides stdio transport | mcp, node, sdk, server | stable | 2026-04-10 |
+| MCP vs Hooks: proactive (keep hooks) vs reactive (move to MCP) classification | mcp, hooks, architecture, migration | stable | 2026-04-10 |
+| code-review-graph hint system: every tool response includes next_steps guidance | code-graph, hints, ux, tool-response | stable | 2026-04-10 |
+| code-review-graph storage: SQLite with FTS5 + tree-sitter AST parsing | code-graph, sqlite, tree-sitter, fts5, search | stable | 2026-04-10 |
+| code-review-graph uses MCP tools + CLAUDE.md guidance, NOT hook interception | code-graph, mcp, architecture, claude-code | stable | 2026-04-10 |
 | Combined ado-build-analysis skill: 8 steps in 3 phases | skills, ado-build-analysis, combined | stable | 2026-03-18 |
 | 49 scripts across 2 projects group into 7 skill candidates | skills, scripts, analysis, candidates | stable | 2026-03-17 |
 | Auto skill generation pipeline: chain detection + workflow candidates + SKILL.md generation | skills, auto-generation, workflow, chain-detection | stable | 2026-03-17 |

@@ -23,6 +23,9 @@ node_modules/
 .ai-memory/.daemon-port
 .ai-memory/.daemon-pid
 .ai-memory/embeddings.json
+.ai-memory/code-graph.db
+.ai-memory/code-graph.db-shm
+.ai-memory/code-graph.db-wal
 
 # ── Local settings (user-specific) ──
 .claude/settings.local.json

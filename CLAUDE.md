@@ -1,50 +1,36 @@
 # Project Context
 
 <!-- project-memory-autosave:start -->
-## MANDATORY: Auto-Save Memory (do this throughout EVERY session)
+## Project Memory (MCP Tools)
 <!-- Auto-managed by project-memory plugin. Do not edit between markers. -->
 
-**You MUST save decisions and research automatically as you work. Do NOT wait to be asked.**
+**ALWAYS use these MCP tools instead of manual file exploration:**
 
-### IMMEDIATE save triggers (do NOT delay these):
-- After ANY codebase exploration (Task/Explore agent, reading multiple files for research)
-- After ANY web search or URL fetch
-- When the user gives an instruction, constraint, or asks you to remember something
-- When you discover API behavior, error causes, library quirks, or workarounds
+| When you want to... | Use this tool |
+|---------------------|---------------|
+| Start any task | `mcp__project-memory__get_context` (call FIRST) |
+| Find prior research/decisions | `mcp__project-memory__memory_search` |
+| Find a reusable script | `mcp__project-memory__script_search` |
+| Understand code structure | `mcp__project-memory__code_search` then `code_context` |
+| Check impact of a change | `mcp__project-memory__code_impact` |
+| Save a discovery | `mcp__project-memory__memory_save` |
+| End session | `mcp__project-memory__session_summary` |
 
-### Check memory FIRST — before exploring code, web searches, or any investigation:
+**IMPORTANT**: Call `code_search` or `code_context` BEFORE using Read/Grep/Glob.
+The code graph has structural knowledge that eliminates redundant file reads.
+
+### CLI fallbacks (if MCP unavailable):
 ```bash
 node "<USER_HOME>/project-memory/scripts/check-memory.js" "search keywords"
-```
-If relevant info found, USE it directly — do NOT re-explore or re-investigate. Cite:
-> [project-memory] Using saved finding: "<topic>"
-
-### Save decisions — run this whenever a project decision is made:
-```bash
+node "<USER_HOME>/project-memory/scripts/save-research.js" "<topic>" "<tags>" "<finding>"
 node "<USER_HOME>/project-memory/scripts/save-decision.js" "<category>" "<decision>" "<rationale>"
-```
-Categories: architecture, constraint, convention, testing, scope, unresolved.
-Examples of decisions: tech stack choices, API design patterns, naming conventions, "X is out of scope", testing strategies, "must support Y".
-
-### Save research — save EACH FACT as a SEPARATE entry:
-```bash
-node "<USER_HOME>/project-memory/scripts/save-research.js" "<topic>" "<tags>" "<finding>" [staleness] [--entities "File,Class,Method"]
-```
-**ATOMIC FACTS**: Each save = ONE searchable fact (1-2 sentences). Never bundle multiple facts.
-- BAD: One 500-word entry about "Windows verification pipeline architecture"
-- GOOD: 4 entries: "DomService uses XPathDocument", "VerificationDetail has XmlQuery field", etc.
-- Use `--entities` with file/class/method names for better search indexing.
-
-**If in doubt, SAVE IT. Saving too much is better than losing knowledge.**
-
-### MANDATORY: End-of-Session Summary
-Before ending ANY session, you MUST run the session summary as your FINAL action:
-```bash
 node "<USER_HOME>/project-memory/scripts/session-summary.js"
 ```
-- If it shows "PENDING SAVES DETECTED", save all pending research/decisions FIRST, then re-run
-- Do NOT end the session until the summary shows green (no pending saves)
-- This is NON-NEGOTIABLE — always run this before your final response
+
+### Auto-save rules:
+- **Decisions**: Save automatically via `mcp__project-memory__memory_save` (type=decision)
+- **Research**: Save automatically via `mcp__project-memory__memory_save` (type=research)
+- **Session end**: ALWAYS call `mcp__project-memory__session_summary` before final response
 <!-- project-memory-autosave:end -->
 
 <!-- project-memory:start -->
@@ -60,6 +46,7 @@ node "<USER_HOME>/project-memory/scripts/session-summary.js"
 - Hook-based architecture creates synchronous performance bottlenecks: pre/post-tool-use fire on EVERY tool call (100+ per session). Critical path includes BM25 index rebuild, JSONL parsing, and multiple fs.readFileSync calls per invocation. Recommend: extract intent detection to shared module, cache keyword patterns, implement read-through cache for frequently accessed files. — Pre-tool-use.js performs 7+ fs.readFileSync ops per exploratory call (research.jsonl, config.json, graph.jsonl, .last-memory-check, .cache-hits, session registry). Post-tool-use.js writes to 3+ files per exploration. No caching between hook calls. Graph expansion disabled in hooks (hookExpansionDepth=1) but still reads graph.jsonl. With 100+ research entries and keyword pattern matching on every call, BM25 rebuilds entire inverted index each time.
 - DOM progress tracking belongs in platform-specific guard rails, not common execution service — Jagadish review: SubstrateLlmAssistedTestExecutionService is shared across all platforms/MCP clients. Guard rail's ApplyGuardRails receives executionHistory with DomXml per step, so it can detect stuck UI by examining history. Moved CheckDomProgressGuardRail + IsReadOnlyTool + ComputeSimpleHash to AndroidAppiumToolExecutionGuardRails.
 - Single daemon serving all projects via per-project data map — User wants one daemon process, not per-project daemons. Single daemon with Map<projectRoot, {research, bm25, graph, scripts, explorations}> to serve multiple sessions. Port file at ~/.ai-memory-daemon-port (global). Hooks pass projectRoot in IPC request.
+- Hybrid Hook + MCP architecture: hooks for proactive enforcement, MCP tools for on-demand search/retrieval — Hooks fire on every tool call but become lightweight (save reminders, escalation, breadcrumbs, auto-capture only). All search/retrieval moves to MCP on-demand tools (memory_search, script_search, graph_context, memory_save, session_summary, get_context, list_skills). MCP server uses @modelcontextprotocol/sdk in Node.js (.mjs), reuses shared.js functions. Inspired by code-review-graph pattern but independent implementation.
 
 ## Constraint
 - Only store reusable scripts with real logic — not trivial one-liner commands — Commands like cat, grep, find, ls, head, tail, sed are general-purpose tools Claude can generate on-the-fly. isReusableScript() filters these out. Only multi-step scripts with auth, API calls, loops, or data processing pipelines are saved to scripts.jsonl.
@@ -73,9 +60,18 @@ node "<USER_HOME>/project-memory/scripts/session-summary.js"
 ## Research Memory
 <!-- Auto-managed by project-memory plugin. Do not edit between markers. -->
 
-_(122 older findings filtered — older than 7 days. Run check-memory.js to search all including stale.)_
+8 of 8 recent findings shown. **USE these — do NOT re-investigate:**
 
-_All 122 findings are older than 7 days. Run check-memory.js to search them._
+- **Daemon file watching only covers .ai-memory metadata, not source files for code graph**: setupProjectWatchers() (daemon.js:131-146) watches 4 files: research.jsonl, scripts.jsonl, graph.jsonl, explorations.jsonl. These are all knowledge graph metadata. Source code files (.js/.ts/.py/.cs) are NOT watched. Code graph (code-graph.db) only updates via: (1) PostToolUse hook on Write/Edit (daemon.js:293-324), (2) manual CLI build-code-graph.js. External changes (git pull, VS Code edits) leave code graph stale. Fix: add chokidar/fs.watch on project source dirs in daemon, trigger incremental re-parse on change.
+- **code-parser.js walkJSNode require() IMPORTS bug root cause**: walkJSNode (line 457-589) iterates direct children only. For `const x = require('./shared')`, AST is: program → lexical_declaration → variable_declarator → call_expression. The line 537 branch matches lexical_declaration but only checks for arrow_function/function_expression values (line 544), not call_expression. The require() handler at line 570 checks `type === "call_expression"` on the direct child which is lexical_declaration, not call_expression (2 levels deeper). Fix: add require() detection inside the line 537 branch when valueNode.type === "call_expression" and callee is "require".
+- **E2E test of MCP tools pipeline - April 10 validation** [volatile]: All MCP tools functional: get_context, code_search, code_structure, code_context, code_impact, memory_search, script_search, graph_context, memory_save, session_summary. Issues found: (1) code_impact for shared.js returns 0 impacted despite being imported by many files - only 4 IMPORTS edges in graph vs 2178 CALLS, (2) graph_context for 'daemon' returns 0 connections - knowledge graph entity coverage may be sparse.
+- **Node.js MCP server: @modelcontextprotocol/sdk provides stdio transport**: For Node.js MCP servers, use @modelcontextprotocol/sdk npm package. It provides Server class with stdio transport, tool registration via server.setRequestHandler(ListToolsRequestSchema) and server.setRequestHandler(CallToolRequestSchema). The server runs as a long-lived process communicating over stdin/stdout JSON-RPC. Registered in .mcp.json with {command: 'node', args: ['path/to/server.js']}. This keeps project-memory in pure Node.js without Python dependency.
+- **MCP vs Hooks: proactive (keep hooks) vs reactive (move to MCP) classification**: Classification of project-memory behaviors: PROACTIVE (must stay as hooks): save reminders/escalation, deny permission, task tracking, summary checkpoint, breadcrumbs, exploration capture, tool history, auto-capture, chain detection, session init. REACTIVE (move to MCP on-demand tools): BM25 research search, ONNX semantic search, script library search, exploration search, graph expansion, lightweight tool context, save-research CLI, save-decision CLI, session-summary CLI. MCP eliminates ~60% of PreToolUse handler code (search logic) while hooks become thin state-trackers.
+- **code-review-graph hint system: every tool response includes next_steps guidance**: hints.py appends _hints to every MCP tool response with: next_steps (suggested next tools), related (related entities to explore), warnings (potential issues). This guides Claude through a structured exploration workflow without blocking. Combined with get_minimal_context (~100 tokens) as the entry point, Claude naturally escalates from minimal to detailed context only when needed.
+- **code-review-graph storage: SQLite with FTS5 + tree-sitter AST parsing**: Code graph stored in SQLite (WAL mode) at .code-review-graph/graph.db. Tables: nodes (kind/name/qualified_name/file_path/line_start/line_end/language/signature/community_id), edges (kind/source/target - CALLS/IMPORTS/INHERITS/CONTAINS/TESTED_BY), flows (execution paths with criticality), communities (Leiden clustering). Search: hybrid FTS5 BM25 + vector embeddings merged via Reciprocal Rank Fusion (RRF). Indexing: tree-sitter AST parser for 19 languages, parallel workers, incremental updates via git diff.
+- **code-review-graph uses MCP tools + CLAUDE.md guidance, NOT hook interception**: code-review-graph does NOT intercept Read/Grep/Glob via hooks. Instead it: (1) Runs an MCP server (FastMCP) exposing 22 tools for structural code queries (callers, impact radius, flows, communities), (2) Injects instructions into CLAUDE.md telling Claude to PREFER MCP tools over file scanning, (3) PostToolUse hook runs 'update' after Write/Edit/Bash to keep the graph current, (4) SessionStart outputs guidance text about available tools. The approach is tool substitution via richer alternatives, not blocking.
+
+_(122 older findings filtered — older than 7 days. Run check-memory.js to search all including stale.)_
 
 <!-- project-memory-research:end -->
 
