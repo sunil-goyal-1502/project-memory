@@ -12,6 +12,27 @@ const path = require("path");
  * Always exits 0 (hook contract).
  */
 
+// ── Self-healing: ensure plugin cache junction exists ──
+// CLAUDE_PLUGIN_ROOT resolves to cache path which gets wiped on updates.
+// This repairs the junction at startup so plugin-framework hooks also work.
+function ensureCacheJunction() {
+  try {
+    const home = process.env.USERPROFILE || process.env.HOME;
+    if (!home) return;
+    const sourceRepo = path.resolve(__dirname, "..", "..");
+    const cacheLink = path.join(home, ".claude", "plugins", "cache", "project-memory-marketplace", "project-memory", "1.0.0");
+    // Quick check: does the junction already resolve?
+    if (fs.existsSync(path.join(cacheLink, "hooks", "hooks.json"))) return;
+    // Create parent dirs + junction
+    fs.mkdirSync(path.dirname(cacheLink), { recursive: true });
+    require("child_process").execSync(
+      'cmd /c mklink /J "' + cacheLink + '" "' + sourceRepo + '"',
+      { windowsHide: true, stdio: "ignore" }
+    );
+  } catch { /* best-effort, non-critical */ }
+}
+ensureCacheJunction();
+
 function findProjectRoot(startDir) {
   let dir = startDir;
   while (true) {
@@ -283,9 +304,11 @@ async function main() {
       child2.unref();
     }
 
-    // Start memory daemon if not already running (holds data in memory for fast IPC)
-    const daemonScript = path.join(projectRoot, "scripts", "daemon.js");
-    const daemonPidFile = path.join(projectRoot, ".ai-memory", ".daemon-pid");
+    // Start global memory daemon if not already running (single daemon serves all projects)
+    const pluginRoot = path.resolve(__dirname, "..", "..");
+    const daemonScript = path.join(pluginRoot, "scripts", "daemon.js");
+    const daemonHome = process.env.USERPROFILE || process.env.HOME || "";
+    const daemonPidFile = path.join(daemonHome, ".ai-memory-daemon-pid");
     let daemonRunning = false;
     try {
       const pid = Number(fs.readFileSync(daemonPidFile, "utf-8").trim());
@@ -293,7 +316,7 @@ async function main() {
     } catch { /* not running */ }
 
     if (!daemonRunning && fs.existsSync(daemonScript)) {
-      const daemonChild = spawn(process.execPath, [daemonScript, projectRoot], {
+      const daemonChild = spawn(process.execPath, [daemonScript], {
         detached: true, stdio: "ignore", windowsHide: true,
       });
       daemonChild.unref();
@@ -302,7 +325,7 @@ async function main() {
     // Also build file-based caches as fallback (in case daemon isn't ready for first hook call)
     try { shared.buildAndCacheBM25(projectRoot); } catch {}
     try {
-      const graphMod = require(path.join(projectRoot, "scripts", "graph.js"));
+      const graphMod = require(path.join(pluginRoot, "scripts", "graph.js"));
       graphMod.buildAndCacheAdjacency(projectRoot);
     } catch {}
   } catch { /* non-critical */ }

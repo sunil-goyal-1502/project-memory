@@ -38,7 +38,7 @@ function test_detect_retry_success(testRoot) {
   assert.notStrictEqual(capture, null, "Should detect retry success pattern");
   assert.ok(capture.tags.includes("retry-success"), "Should tag as retry-success");
   assert.ok(capture.tags.includes("auto-capture"), "Should tag as auto-capture");
-  assert.ok(capture.finding.includes("grep"), "Finding should contain the command");
+  assert.ok(capture.command.includes("grep"), "Command should contain the command name");
 }
 
 function test_no_capture_on_first_success(testRoot) {

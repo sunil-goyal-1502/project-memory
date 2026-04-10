@@ -42,7 +42,12 @@ function test_unsaved_after_save(testRoot) {
   shared.appendBreadcrumb(testRoot, { tool: "Task", prompt: "explore old" });
   const researchPath = path.join(testRoot, ".ai-memory", "research.jsonl");
   fs.writeFileSync(researchPath, '{"id":"x","ts":"' + new Date().toISOString() + '"}\n', "utf-8");
-  const start = Date.now(); while (Date.now() - start < 50) { /* spin */ }
+  // Set mtime explicitly to 2 seconds in the future to ensure it's unambiguously after BC1
+  const futureTime = new Date(Date.now() + 2000);
+  fs.utimesSync(researchPath, futureTime, futureTime);
+  // Wait for the future time to pass so BC2 is after the explicit mtime
+  const target = futureTime.getTime() + 100;
+  while (Date.now() < target) { /* spin */ }
   shared.appendBreadcrumb(testRoot, { tool: "Task", prompt: "explore new" });
   const unsaved = shared.getUnsavedBreadcrumbs(testRoot);
   assert.strictEqual(unsaved.length, 1);

@@ -395,7 +395,7 @@ function generateClaudeScriptsSection(scripts) {
       const representative = group.scripts[0]; // best example
       const variantCount = group.scripts.length;
       const paramNames = (representative.parameters || []).map(p => `\`{{${p.name}}}\``).join(", ");
-      const truncTemplate = representative.template.length > 120 ? representative.template.slice(0, 120) + "..." : representative.template;
+      const truncTemplate = representative.template;
 
       if (variantCount === 1) {
         content += `- **${representative.name}** (${representative.usage_count || 1}x): \`${truncTemplate}\`\n`;

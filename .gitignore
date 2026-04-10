@@ -1,1 +1,34 @@
 node_modules/
+
+# ── Project-specific data (contains user research, decisions, scripts) ──
+# These files contain project-specific findings and may include sensitive info
+.ai-memory/research.jsonl
+.ai-memory/research.jsonl.bak
+.ai-memory/decisions.jsonl
+.ai-memory/scripts.jsonl
+.ai-memory/graph.jsonl
+.ai-memory/entity-index.json
+.ai-memory/metadata.json
+.ai-memory/session-history.jsonl
+.ai-memory/workflow-candidates.jsonl
+.ai-memory/explorations/
+
+# ── Derived/cache files (regenerated at runtime) ──
+.ai-memory/.bm25-cache.json
+.ai-memory/.graph-adj-cache.json
+.ai-memory/.session-state.json
+.ai-memory/.tool-history
+.ai-memory/.exploration-log
+.ai-memory/.hook-debug.log
+.ai-memory/.daemon-port
+.ai-memory/.daemon-pid
+.ai-memory/embeddings.json
+
+# ── Local settings (user-specific) ──
+.claude/settings.local.json
+
+# ── Temp/scratch files ──
+nul
+fix_*.py
+test-*.js
+!scripts/tests/test-*.js

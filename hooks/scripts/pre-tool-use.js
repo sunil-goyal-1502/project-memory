@@ -3,13 +3,15 @@
 
 /**
  * PreToolUse hook — thin IPC client.
- * Connects to memory daemon for fast in-memory search (~30ms).
- * Falls back to direct execution if daemon unavailable (~1500ms).
+ * Connects to global memory daemon for fast in-memory search (~10ms).
+ * Falls back to direct execution if daemon unavailable.
  */
 
 const fs = require("fs");
 const path = require("path");
 const net = require("net");
+
+const home = process.env.USERPROFILE || process.env.HOME || "";
 
 function main() {
   const startMs = Date.now();
@@ -19,14 +21,17 @@ function main() {
   const memDir = findMemDir(input.cwd || process.cwd(), input.session_id);
   if (!memDir) { process.stdout.write("{}"); process.exit(0); }
 
-  const portFile = path.join(memDir, ".daemon-port");
+  const projectRoot = path.dirname(memDir); // memDir = projectRoot/.ai-memory
+
+  // Global daemon port file (single daemon serves all projects)
+  const portFile = path.join(home, ".ai-memory-daemon-port");
   let port = 0;
   try { port = Number(fs.readFileSync(portFile, "utf-8").trim()); } catch {}
 
   if (port > 0) {
-    // Fast path: TCP to daemon
+    // Fast path: TCP to global daemon with projectRoot
     const client = net.createConnection({ host: "127.0.0.1", port, timeout: 800 }, () => {
-      client.end(JSON.stringify({ type: "pre-tool-use", input }) + "\n");
+      client.end(JSON.stringify({ type: "pre-tool-use", projectRoot, input }) + "\n");
     });
 
     let data = "";
@@ -36,7 +41,6 @@ function main() {
       debugLog(memDir, `DAEMON-IPC: ${elapsed}ms`);
       try {
         const response = JSON.parse(data.split("\n")[0]);
-        // Translate daemon response to hook contract
         if (response.hookSpecificOutput) {
           process.stdout.write(JSON.stringify({ hookSpecificOutput: response.hookSpecificOutput }));
         } else if (response.systemMessage) {
@@ -53,18 +57,18 @@ function main() {
       }
       process.exit(0);
     });
-    client.on("error", () => { fallback(input, memDir, startMs); });
-    client.on("timeout", () => { client.destroy(); fallback(input, memDir, startMs); });
+    client.on("error", () => { fallback(projectRoot, input, memDir, startMs); });
+    client.on("timeout", () => { client.destroy(); fallback(projectRoot, input, memDir, startMs); });
   } else {
-    fallback(input, memDir, startMs);
+    fallback(projectRoot, input, memDir, startMs);
   }
 }
 
-function fallback(input, memDir, startMs) {
+function fallback(projectRoot, input, memDir, startMs) {
   debugLog(memDir, `DAEMON-FALLBACK: daemon unavailable, direct execution`);
   try {
     const daemon = require(path.resolve(__dirname, "..", "..", "scripts", "daemon.js"));
-    const response = daemon.handlePreToolUse(input);
+    const response = daemon.handlePreToolUse(projectRoot, input);
     if (response.hookSpecificOutput) {
       process.stdout.write(JSON.stringify({ hookSpecificOutput: response.hookSpecificOutput }));
     } else if (response.systemMessage) {
@@ -94,7 +98,6 @@ function findMemDir(cwd, sessionId) {
   // Session registry fallback
   if (sessionId) {
     try {
-      const home = process.env.USERPROFILE || process.env.HOME || "";
       const sessFile = path.join(home, ".ai-memory-sessions", sessionId);
       const savedRoot = fs.readFileSync(sessFile, "utf-8").trim();
       if (savedRoot && fs.existsSync(path.join(savedRoot, ".ai-memory"))) {
@@ -104,7 +107,6 @@ function findMemDir(cwd, sessionId) {
   }
   // Cached root fallback
   try {
-    const home = process.env.USERPROFILE || process.env.HOME || "";
     const cached = fs.readFileSync(path.join(home, ".ai-memory-cached-root"), "utf-8").trim();
     if (cached && fs.existsSync(path.join(cached, ".ai-memory"))) return path.join(cached, ".ai-memory");
   } catch {}

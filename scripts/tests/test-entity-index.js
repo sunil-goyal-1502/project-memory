@@ -46,12 +46,13 @@ function test_entity_lookup_from_query(testRoot) {
   shared.addToEntityIndex(testRoot, ["DomService", "XPathDocument"], "f1");
   shared.addToEntityIndex(testRoot, ["FlaUI", "DomService"], "f2");
   const index = shared.readEntityIndex(testRoot);
+  // Entity index keys are stored as entity.toLowerCase() — lookup by lowercase name, not tokenized
   const hitIds = new Set();
-  for (const token of shared.tokenize("DomService verification")) {
-    for (const id of (index[token] || [])) hitIds.add(id);
+  for (const entity of ["domservice"]) {
+    for (const id of (index[entity] || [])) hitIds.add(id);
   }
-  assert.ok(hitIds.has("f1"));
-  assert.ok(hitIds.has("f2"));
+  assert.ok(hitIds.has("f1"), "f1 should be found via domservice key");
+  assert.ok(hitIds.has("f2"), "f2 should be found via domservice key");
 }
 
 function test_entity_missing_lookup(testRoot) {

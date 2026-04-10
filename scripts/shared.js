@@ -1167,6 +1167,217 @@ function searchExplorationsForHook(projectRoot, query) {
   });
 }
 
+// ── Workflow Chain Detection & Skill Generation ──
+
+const WORKFLOW_CANDIDATES_FILE = "workflow-candidates.jsonl";
+const CHAIN_GAP_MS = 90000; // 90 seconds max gap between chain steps
+const MIN_CHAIN_LENGTH = 2;
+const MAX_CHAIN_LENGTH = 8;
+
+const TRIVIAL_COMMANDS = /^\s*(ls|dir|cat|head|tail|echo|cd|pwd|whoami|date|clear|cls|type|set|env|which|where)\b/i;
+
+function isTrivialCommand(entry) {
+  if (!entry || !entry.command) return true;
+  const cmd = entry.command.trim();
+  if (cmd.length < 30) return true;
+  if (TRIVIAL_COMMANDS.test(cmd)) return true;
+  // Skip pure read/navigation commands
+  if (/^\s*(ls|find|dir|tree)\s/i.test(cmd) && !/\|\s*(node|python|grep)/i.test(cmd)) return true;
+  return false;
+}
+
+/**
+ * Extract a chain of consecutive successful non-trivial commands from tool history.
+ * Groups commands within CHAIN_GAP_MS temporal windows.
+ * Returns array of history entries or null if chain too short.
+ */
+function extractChain(projectRoot, currentCall) {
+  const history = readToolHistory(projectRoot);
+  if (history.length < 1) return null;
+
+  const chain = [];
+  // Walk backwards, collect non-trivial successful commands within gap
+  for (let i = history.length - 1; i >= 0; i--) {
+    const entry = history[i];
+    if (!entry.success) break; // chain breaks on failure
+    if (isTrivialCommand(entry)) continue;
+    if (chain.length > 0) {
+      const gap = new Date(chain[0].ts).getTime() - new Date(entry.ts).getTime();
+      if (gap > CHAIN_GAP_MS) break;
+    }
+    chain.unshift(entry);
+    if (chain.length >= MAX_CHAIN_LENGTH) break;
+  }
+
+  // Add current call if non-trivial
+  if (currentCall && currentCall.success && !isTrivialCommand(currentCall)) {
+    chain.push(currentCall);
+  }
+
+  return chain.length >= MIN_CHAIN_LENGTH ? chain : null;
+}
+
+/**
+ * Create a fingerprint from a chain for deduplication.
+ * Uses script skeletons — strips parameters, keeps structure.
+ */
+function fingerprintChain(chain) {
+  return chain.map(entry => {
+    const cmd = (entry.command || "").trim();
+    return extractScriptSkeleton(parameterizeCommand(cmd, entry.description || "").template);
+  });
+}
+
+/**
+ * Check fingerprint overlap between two chains.
+ * Returns overlap ratio (0-1).
+ */
+function chainOverlap(fp1, fp2) {
+  if (fp1.length === 0 || fp2.length === 0) return 0;
+  let matches = 0;
+  const shorter = fp1.length <= fp2.length ? fp1 : fp2;
+  const longer = fp1.length <= fp2.length ? fp2 : fp1;
+  for (let i = 0; i < shorter.length; i++) {
+    // Check if skeleton i in shorter matches any in longer (within ±1 position)
+    for (let j = Math.max(0, i - 1); j <= Math.min(longer.length - 1, i + 1); j++) {
+      if (shorter[i] === longer[j]) { matches++; break; }
+    }
+  }
+  return matches / Math.max(fp1.length, fp2.length);
+}
+
+/**
+ * Build workflow steps from a chain, matching against existing scripts.
+ */
+function buildWorkflowSteps(projectRoot, chain) {
+  const scripts = readScripts(projectRoot);
+  const steps = [];
+
+  for (let i = 0; i < chain.length; i++) {
+    const entry = chain[i];
+    const cmd = (entry.command || "").trim();
+    const { template, parameters } = parameterizeCommand(cmd, entry.description || "");
+
+    // Try matching to an existing script
+    let matchedScript = null;
+    const entrySkeleton = extractScriptSkeleton(template);
+    for (const script of scripts) {
+      const scriptSkeleton = extractScriptSkeleton(script.template);
+      if (entrySkeleton === scriptSkeleton) {
+        matchedScript = script;
+        break;
+      }
+    }
+
+    steps.push({
+      order: i + 1,
+      scriptId: matchedScript ? matchedScript.id : null,
+      name: matchedScript ? matchedScript.name : (entry.description || `Step ${i + 1}`),
+      template: matchedScript ? matchedScript.template : template,
+      params: matchedScript ? matchedScript.parameters : parameters,
+      command: cmd,
+    });
+  }
+
+  return steps;
+}
+
+/**
+ * Extract shared parameters across workflow steps.
+ */
+function mergeWorkflowParams(steps) {
+  const paramMap = new Map(); // name -> { description, default }
+  for (const step of steps) {
+    for (const p of (step.params || [])) {
+      if (!paramMap.has(p.name)) {
+        paramMap.set(p.name, { name: p.name, description: p.description, default: p.default });
+      }
+    }
+  }
+  return Array.from(paramMap.values());
+}
+
+/**
+ * Generate a human-readable name for a workflow from its steps.
+ */
+function generateWorkflowName(steps) {
+  const keywords = new Set();
+  for (const step of steps) {
+    const name = (step.name || "").toLowerCase();
+    for (const kw of ["build", "test", "deploy", "analyze", "download", "fetch", "parse", "log", "timeline", "artifact", "results"]) {
+      if (name.includes(kw)) keywords.add(kw);
+    }
+  }
+  if (keywords.size === 0) return `Workflow: ${steps[0].name}`;
+  const parts = Array.from(keywords).slice(0, 3);
+  return parts.map(w => w[0].toUpperCase() + w.slice(1)).join(" + ") + " Pipeline";
+}
+
+function readWorkflowCandidates(projectRoot) {
+  return readJsonl(path.join(projectRoot, ".ai-memory", WORKFLOW_CANDIDATES_FILE));
+}
+
+function appendWorkflowCandidate(projectRoot, candidate) {
+  appendJsonl(path.join(projectRoot, ".ai-memory", WORKFLOW_CANDIDATES_FILE), candidate);
+}
+
+function updateWorkflowCandidate(projectRoot, candidateId, updates) {
+  const filePath = path.join(projectRoot, ".ai-memory", WORKFLOW_CANDIDATES_FILE);
+  const candidates = readJsonl(filePath);
+  const updated = candidates.map(c => c.id === candidateId ? { ...c, ...updates } : c);
+  fs.writeFileSync(filePath, updated.map(c => JSON.stringify(c)).join("\n") + "\n", "utf-8");
+}
+
+/**
+ * Match a chain against existing workflow candidates, or create a new one.
+ * Returns the matched/created candidate, or null if chain doesn't qualify.
+ */
+function matchOrCreateCandidate(projectRoot, chain, sessionId) {
+  const steps = buildWorkflowSteps(projectRoot, chain);
+
+  // Minimum quality: at least 1 step matches an existing script or is a reusable command
+  const hasRealWork = steps.some(s =>
+    s.scriptId || isReusableScript(s.command)
+  );
+  if (!hasRealWork) return null;
+
+  // Combined template must be substantial
+  const totalLength = steps.reduce((sum, s) => sum + (s.template || s.command || "").length, 0);
+  if (totalLength < 200) return null;
+
+  const fp = fingerprintChain(chain);
+  const candidates = readWorkflowCandidates(projectRoot);
+
+  // Try matching existing candidate
+  for (const candidate of candidates) {
+    if (candidate.status === "created") continue; // skip already-created skills
+    const existingFp = (candidate.steps || []).map(s => extractScriptSkeleton(s.template || ""));
+    if (chainOverlap(fp, existingFp) >= 0.7) {
+      // Match found — add occurrence
+      const occurrences = candidate.occurrences || [];
+      occurrences.push({ sessionId: sessionId || "unknown", ts: new Date().toISOString() });
+      updateWorkflowCandidate(projectRoot, candidate.id, { occurrences });
+      return { ...candidate, occurrences };
+    }
+  }
+
+  // No match — create new candidate
+  const crypto = require("crypto");
+  const newCandidate = {
+    id: "wf_" + crypto.randomBytes(4).toString("hex"),
+    name: generateWorkflowName(steps),
+    steps,
+    sharedParams: mergeWorkflowParams(steps),
+    fingerprint: fp,
+    occurrences: [{ sessionId: sessionId || "unknown", ts: new Date().toISOString() }],
+    status: "candidate",
+    skillPath: null,
+    ts: new Date().toISOString(),
+  };
+  appendWorkflowCandidate(projectRoot, newCandidate);
+  return newCandidate;
+}
+
 module.exports = {
   findProjectRoot, scanHomeForProjects, resolveProjectRoot,
   readJsonl, appendJsonl, tokenize,
@@ -1191,4 +1402,10 @@ module.exports = {
   isExploratoryBash, isExploratoryTask,
   SESSION_STATE_FILE, SESSION_STATE_VERSION, getDefaultSessionState, readSessionState, writeSessionState,
   hasResearch, getLastSaveTs, searchExplorationsForHook,
+  // Workflow chain detection
+  isTrivialCommand, extractChain, fingerprintChain, chainOverlap,
+  buildWorkflowSteps, mergeWorkflowParams, generateWorkflowName,
+  readWorkflowCandidates, appendWorkflowCandidate, updateWorkflowCandidate,
+  matchOrCreateCandidate,
+  WORKFLOW_CANDIDATES_FILE,
 };

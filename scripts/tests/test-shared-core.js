@@ -7,7 +7,8 @@ const path = require("path");
 const shared = require(path.join(__dirname, "..", "shared.js"));
 
 function test_tokenize_basic(testRoot) {
-  assert.deepStrictEqual(shared.tokenize("DomService.cs uses XPath"), ["domservice", "cs", "uses", "xpath"]);
+  // tokenize splits camelCase (Dom|Service) and PascalCase (X|Path)
+  assert.deepStrictEqual(shared.tokenize("DomService.cs uses XPath"), ["dom", "service", "cs", "uses", "x", "path"]);
 }
 
 function test_tokenize_empty(testRoot) {

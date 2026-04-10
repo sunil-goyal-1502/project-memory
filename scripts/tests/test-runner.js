@@ -15,11 +15,23 @@ let totalFailed = 0;
 const failures = [];
 
 function setupTestEnv() {
-  if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true, force: true });
+  // Retry cleanup — background processes (build-embeddings.js) may briefly lock files
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      if (fs.existsSync(TEST_DIR)) fs.rmSync(TEST_DIR, { recursive: true, force: true });
+      break;
+    } catch {
+      const start = Date.now(); while (Date.now() - start < 300) { /* spin */ }
+    }
+  }
   const memDir = path.join(TEST_DIR, ".ai-memory");
   fs.mkdirSync(memDir, { recursive: true });
   fs.writeFileSync(path.join(memDir, "research.jsonl"), "", "utf-8");
   fs.writeFileSync(path.join(memDir, "decisions.jsonl"), "", "utf-8");
+  // Set mtime to the past so breadcrumb tests don't race with setup file timestamps
+  const past = new Date(Date.now() - 10000);
+  fs.utimesSync(path.join(memDir, "research.jsonl"), past, past);
+  fs.utimesSync(path.join(memDir, "decisions.jsonl"), past, past);
   fs.writeFileSync(path.join(memDir, "metadata.json"), JSON.stringify({
     tokenCount: 0, lastSync: new Date().toISOString(), sessionCount: 0,
     decisionCount: 0, researchCount: 0, researchTokenCount: 0,

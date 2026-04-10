@@ -2,16 +2,17 @@
 "use strict";
 
 /**
- * Memory daemon — long-running TCP server that holds all project-memory data
- * in memory. Hooks connect via TCP for fast searches (~30ms vs ~1500ms).
+ * Memory daemon — single global TCP server that holds project-memory data
+ * for ALL projects in memory. Hooks connect via TCP for fast searches (~10ms).
  *
- * Data model: Disk files are source of truth. Daemon is a read-through cache.
- * All writes go to disk first; daemon detects changes via fs.watchFile and reloads.
- * On restart, full state is recovered from disk in ~20ms.
+ * Architecture: Per-project data Map. Projects are loaded lazily on first request.
+ * Disk files are source of truth — daemon detects changes via fs.watchFile and reloads.
+ *
+ * Port/PID files: Global at ~/.ai-memory-daemon-port and ~/.ai-memory-daemon-pid
  *
  * Usage:
- *   node daemon.js [projectRoot]    — start daemon
- *   node daemon.js --stop           — stop running daemon
+ *   node daemon.js                    — start global daemon
+ *   node daemon.js --stop             — stop running daemon
  */
 
 const fs = require("fs");
@@ -29,19 +30,9 @@ const {
 
 const { M, B, R, G, Y, C, D } = ANSI;
 
-// ── Resolve project root ──
-const projectRoot = process.argv[2] && process.argv[2] !== "--stop"
-  ? process.argv[2]
-  : (shared.findProjectRoot(process.cwd()) || shared.scanHomeForProjects());
-
-if (!projectRoot) {
-  console.error("No .ai-memory/ found");
-  process.exit(1);
-}
-
-const memDir = path.join(projectRoot, ".ai-memory");
-const portFile = path.join(memDir, ".daemon-port");
-const pidFile = path.join(memDir, ".daemon-pid");
+const home = process.env.USERPROFILE || process.env.HOME || "";
+const portFile = path.join(home, ".ai-memory-daemon-port");
+const pidFile = path.join(home, ".ai-memory-daemon-pid");
 const pluginRoot = path.resolve(__dirname, "..").replace(/\\/g, "/");
 
 // ── Stop command ──
@@ -56,62 +47,96 @@ if (process.argv[2] === "--stop") {
   process.exit(0);
 }
 
-// ── In-memory data store ──
-let research = [];
-let scripts = [];
-let researchBM25 = null;
-let scriptBM25 = null;
-let graphAdj = null;
-let explorations = [];
-let config = {};
-let lastActivity = Date.now();
+// ══════════════════════════════════════════════════════════
+// PER-PROJECT DATA STORE
+// ══════════════════════════════════════════════════════════
 
+const projects = new Map(); // projectRoot -> ProjectData
+let lastActivity = Date.now();
 const INACTIVITY_TIMEOUT_MS = 2 * 60 * 60 * 1000; // 2 hours
 
-function reload(what) {
+function createEmptyProjectData(projectRoot) {
+  return {
+    projectRoot,
+    memDir: path.join(projectRoot, ".ai-memory"),
+    research: [],
+    scripts: [],
+    researchBM25: null,
+    scriptBM25: null,
+    graphAdj: null,
+    explorations: [],
+    config: {},
+    watchersSetup: false,
+  };
+}
+
+function getOrLoadProject(projectRoot) {
+  if (!projectRoot) return null;
+  const normalized = projectRoot.replace(/\\/g, "/").replace(/\/$/, "");
+  if (!projects.has(normalized)) {
+    if (!fs.existsSync(path.join(normalized, ".ai-memory"))) return null;
+    const data = createEmptyProjectData(normalized);
+    projects.set(normalized, data);
+    reloadProject(normalized, "all");
+    setupProjectWatchers(normalized);
+  }
+  return projects.get(normalized);
+}
+
+function reloadProject(projectRoot, what) {
+  const normalized = projectRoot.replace(/\\/g, "/").replace(/\/$/, "");
+  let data = projects.get(normalized);
+  if (!data) {
+    data = createEmptyProjectData(normalized);
+    projects.set(normalized, data);
+  }
   const t = Date.now();
   if (what === "all" || what === "research") {
-    research = shared.readJsonl(path.join(memDir, "research.jsonl"));
-    researchBM25 = shared.buildBM25Index(research);
+    data.research = shared.readJsonl(path.join(data.memDir, "research.jsonl"));
+    data.researchBM25 = shared.buildBM25Index(data.research);
   }
   if (what === "all" || what === "scripts") {
-    scripts = shared.readScripts(projectRoot);
-    const searchable = scripts.map(s => ({
+    data.scripts = shared.readScripts(normalized);
+    const searchable = data.scripts.map(s => ({
       id: s.id, topic: s.name || "", tags: s.tags || [],
       finding: [s.name || "", s.description || "", (s.tags || []).join(" ")].join(" "),
     }));
-    scriptBM25 = shared.buildBM25Index(searchable);
+    data.scriptBM25 = shared.buildBM25Index(searchable);
   }
   if (what === "all" || what === "graph") {
     try {
       const graphMod = require(path.join(__dirname, "graph.js"));
-      const triples = graphMod.readGraph(projectRoot);
-      graphAdj = graphMod.buildAdjacencyIndex(triples);
-    } catch { graphAdj = null; }
+      const triples = graphMod.readGraph(normalized);
+      data.graphAdj = graphMod.buildAdjacencyIndex(triples);
+    } catch { data.graphAdj = null; }
   }
   if (what === "all" || what === "explorations") {
-    explorations = shared.readExplorationsIndex(projectRoot);
+    data.explorations = shared.readExplorationsIndex(normalized);
   }
   if (what === "all" || what === "config") {
     try {
       const configMod = require(path.join(__dirname, "config.js"));
-      config = configMod.readConfig(projectRoot);
-    } catch { config = {}; }
+      data.config = configMod.readConfig(normalized);
+    } catch { data.config = {}; }
   }
   const elapsed = Date.now() - t;
-  log(`RELOAD ${what}: ${elapsed}ms (research=${research.length}, scripts=${scripts.length}, explorations=${explorations.length})`);
+  logForProject(normalized, `RELOAD ${what}: ${elapsed}ms (research=${data.research.length}, scripts=${data.scripts.length}, explorations=${data.explorations.length})`);
 }
 
-function log(msg) {
+function logForProject(projectRoot, msg) {
   shared.debugLog(projectRoot, "DAEMON", msg);
 }
 
-// ── File watchers ──
-function setupWatchers() {
+// ── File watchers (per-project) ──
+function setupProjectWatchers(projectRoot) {
+  const normalized = projectRoot.replace(/\\/g, "/").replace(/\/$/, "");
+  const data = projects.get(normalized);
+  if (!data || data.watchersSetup) return;
+  data.watchersSetup = true;
   const watch = (file, what) => {
-    const fullPath = path.join(memDir, file);
+    const fullPath = path.join(data.memDir, file);
     if (fs.existsSync(fullPath)) {
-      fs.watchFile(fullPath, { interval: 500 }, () => { reload(what); });
+      fs.watchFile(fullPath, { interval: 500 }, () => { reloadProject(normalized, what); });
     }
   };
   watch("research.jsonl", "research");
@@ -127,8 +152,8 @@ function bm25Search(query, index, threshold, limit) {
 }
 
 // ── Graph expansion using in-memory adjacency ──
-function graphExpand(seedEntities, depth) {
-  if (!graphAdj || seedEntities.length === 0) return { connections: [], relatedFindingIds: new Set() };
+function graphExpand(adj, seedEntities, depth) {
+  if (!adj || seedEntities.length === 0) return { connections: [], relatedFindingIds: new Set() };
   const visited = new Set();
   const connections = [];
   const relatedFindingIds = new Set();
@@ -138,7 +163,7 @@ function graphExpand(seedEntities, depth) {
     for (const entity of frontier) {
       if (visited.has(entity)) continue;
       visited.add(entity);
-      const edges = graphAdj[entity] || [];
+      const edges = adj[entity] || [];
       for (const edge of edges) {
         if (!visited.has(edge.target)) {
           connections.push({ from: entity, predicate: edge.predicate, to: edge.target, src: edge.src, hop });
@@ -152,10 +177,10 @@ function graphExpand(seedEntities, depth) {
   return { connections, relatedFindingIds };
 }
 
-// ── Exploration search using in-memory index ──
-function searchExplorations(query) {
-  if (explorations.length === 0) return [];
-  const searchable = explorations.map(e => ({
+// ── Exploration search using in-memory data ──
+function searchExplorationsForProject(data, query) {
+  if (data.explorations.length === 0) return [];
+  const searchable = data.explorations.map(e => ({
     id: e.id, topic: e.query || "", tags: e.tags || [],
     finding: [e.query || "", (e.files || []).join(" "), (e.entities || []).join(" "), (e.tags || []).join(" ")].join(" "),
     _raw: e,
@@ -163,11 +188,11 @@ function searchExplorations(query) {
   const index = shared.buildBM25Index(searchable);
   const results = shared.bm25Score(query, index);
   const entryMap = {};
-  for (const e of explorations) entryMap[e.id] = e;
+  for (const e of data.explorations) entryMap[e.id] = e;
   return results.filter(r => r.score > 0.5).slice(0, 3).map(r => {
     const entry = entryMap[r.docId];
     if (!entry) return null;
-    const explorationsDir = path.join(memDir, "explorations");
+    const explorationsDir = path.join(data.memDir, "explorations");
     return {
       agent: entry.agent || "unknown",
       date: entry.ts ? entry.ts.substring(0, 10) : "unknown",
@@ -178,19 +203,30 @@ function searchExplorations(query) {
   }).filter(Boolean);
 }
 
+// ── Resolve projectRoot for fallback mode ──
+function resolveProjectRoot(explicitRoot, input) {
+  if (explicitRoot) return explicitRoot;
+  const cwd = (input && input.cwd) || process.cwd();
+  return shared.findProjectRoot(cwd) || shared.scanHomeForProjects();
+}
+
 // ══════════════════════════════════════════════════════════
 // PRE-TOOL-USE HANDLER
 // ══════════════════════════════════════════════════════════
 
-function handlePreToolUse(input) {
+function handlePreToolUse(projectRoot, input) {
+  const root = resolveProjectRoot(projectRoot, input);
+  const data = getOrLoadProject(root);
+  if (!data) return {};
+
   // Lightweight tools: inject only, never block
   if (LIGHTWEIGHT_TOOLS.has(input.tool_name)) {
     const toolInput = input.tool_input || {};
     const query = [toolInput.file_path || "", toolInput.pattern || "", toolInput.description || ""].join(" ").trim();
-    if (query.length > 5 && research.length > 0) {
-      const relevant = bm25Search(query, researchBM25, 0.5, 2);
+    if (query.length > 5 && data.research.length > 0) {
+      const relevant = bm25Search(query, data.researchBM25, 0.5, 2);
       if (relevant.length > 0) {
-        const researchMap = {}; for (const r of research) researchMap[r.id] = r;
+        const researchMap = {}; for (const r of data.research) researchMap[r.id] = r;
         const lines = [`${C}${B}★ Memory Context ───────────────────────────────${R}`];
         for (const { docId } of relevant) {
           const entry = researchMap[docId];
@@ -206,31 +242,67 @@ function handlePreToolUse(input) {
   if (!MATCHED_TOOLS.has(input.tool_name)) return {};
   if (input.tool_name === "Bash" && isSelfCall(input)) return {};
 
+  // Script search for ALL Bash commands (not just exploratory) — surface saved scripts
+  // before Claude writes a new one from scratch
+  if (input.tool_name === "Bash" && data.scriptBM25) {
+    const toolInput = input.tool_input || {};
+    const scriptQuery = [toolInput.command || "", toolInput.description || ""].join(" ").trim();
+    if (scriptQuery.length > 5) {
+      const scriptHits = bm25Search(scriptQuery, data.scriptBM25, 0.5, 2);
+      if (scriptHits.length > 0) {
+        const scriptMap = {}; for (const s of data.scripts) scriptMap[s.id] = s;
+        const lines = [];
+        lines.push(`${C}${B}★ REUSE THESE SCRIPTS — do NOT write new ones ──${R}`);
+        lines.push(`${Y}  IMPORTANT: These are complete, tested scripts. Use them AS-IS.${R}`);
+        lines.push(`${Y}  Only replace {{parameter}} placeholders with actual values.${R}`);
+        lines.push(``);
+        for (const { docId } of scriptHits) {
+          const script = scriptMap[docId];
+          if (!script) continue;
+          lines.push(`${G}${B}  ${script.name}${R} (used ${script.usage_count || 1}x)`);
+          if (script.parameters && script.parameters.length > 0) {
+            lines.push(`${Y}  Parameters to fill in:${R}`);
+            for (const p of script.parameters) {
+              lines.push(`${Y}    {{${p.name}}}: ${p.description} (default: ${p.default || "none"})${R}`);
+            }
+          }
+          lines.push(`${D}  ┌─ COMPLETE SCRIPT (copy-paste, replace {{params}}) ─┐${R}`);
+          lines.push(`${G}${script.template}${R}`);
+          lines.push(`${D}  └──────────────────────────────────────────────────┘${R}`);
+          lines.push(``);
+        }
+        lines.push(`${Y}${B}  ▶ DO NOT recreate these scripts. Copy above, replace {{params}}, run.${R}`);
+        lines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
+        return { systemMessage: lines.join("\n") };
+      }
+    }
+  }
+
   const isExploratory = input.tool_name === "Bash" ? isExploratoryBash(input)
     : input.tool_name === "Task" ? isExploratoryTask(input) : true;
 
   if (!isExploratory) return {};
 
-  if (research.length === 0) return {};
+  if (data.research.length === 0) return {};
 
   const toolInput = input.tool_input || {};
   const query = [toolInput.description || "", toolInput.prompt || "", toolInput.query || ""].join(" ").trim();
   if (query.length <= 5) return {};
 
   // BM25 search (in-memory, ~0ms)
-  let relevant = bm25Search(query, researchBM25, 0.5, 3);
+  let relevant = bm25Search(query, data.researchBM25, 0.5, 3);
 
   // Graph expansion (in-memory adjacency, ~0ms)
-  if (config.graph?.enabled && relevant.length > 0) {
-    const researchLookup = {}; for (const r of research) researchLookup[r.id] = r;
+  if (data.config.graph?.enabled && relevant.length > 0) {
+    const researchLookup = {}; for (const r of data.research) researchLookup[r.id] = r;
     const hitEntities = [];
     for (const { docId } of relevant) {
       const entry = researchLookup[docId];
       if (entry?.entities) hitEntities.push(...entry.entities);
     }
     if (hitEntities.length > 0) {
-      const depth = config.graph?.hookExpansionDepth || 1;
-      const expanded = graphExpand(hitEntities, depth);
+      const depth = data.config.graph?.hookExpansionDepth || 1;
+      const expanded = graphExpand(data.graphAdj, hitEntities, depth);
       const existingIds = new Set(relevant.map(r => r.docId));
       for (const findingId of expanded.relatedFindingIds) {
         if (!existingIds.has(findingId) && researchLookup[findingId]) {
@@ -238,13 +310,13 @@ function handlePreToolUse(input) {
           existingIds.add(findingId);
         }
       }
-      const maxFindings = config.hooks?.maxInjectedFindings || 3;
+      const maxFindings = data.config.hooks?.maxInjectedFindings || 3;
       relevant = relevant.slice(0, maxFindings + 2);
     }
   }
 
   if (relevant.length > 0) {
-    const researchMap = {}; for (const r of research) researchMap[r.id] = r;
+    const researchMap = {}; for (const r of data.research) researchMap[r.id] = r;
     const lines = [];
     lines.push(`${C}${B}★ Memory Cache Hit ─────────────────────────────${R}`);
     lines.push(`${C}  ${relevant.length} saved finding(s) match your current task:${R}`);
@@ -264,7 +336,7 @@ function handlePreToolUse(input) {
     lines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
 
     // Explorations
-    const explorationHits = searchExplorations(query);
+    const explorationHits = searchExplorationsForProject(data, query);
     if (explorationHits.length > 0) {
       lines.push(``);
       lines.push(`${C}${B}★ Past Explorations Found ──────────────────────${R}`);
@@ -279,35 +351,39 @@ function handlePreToolUse(input) {
     }
 
     // Scripts
-    const scriptResults = bm25Search(query, scriptBM25, 0.5, 2);
+    const scriptResults = bm25Search(query, data.scriptBM25, 0.5, 2);
     if (scriptResults.length > 0) {
-      const scriptMap = {}; for (const s of scripts) scriptMap[s.id] = s;
+      const scriptMap = {}; for (const s of data.scripts) scriptMap[s.id] = s;
       lines.push(``);
-      lines.push(`${C}${B}★ Reusable Scripts Found ───────────────────────${R}`);
+      lines.push(`${C}${B}★ REUSE THESE SCRIPTS — do NOT write new ones ──${R}`);
+      lines.push(`${Y}  IMPORTANT: These are complete, tested scripts. Use them AS-IS.${R}`);
+      lines.push(`${Y}  Only replace {{parameter}} placeholders with actual values.${R}`);
+      lines.push(``);
       for (const { docId } of scriptResults) {
         const script = scriptMap[docId];
         if (!script) continue;
         lines.push(`${G}${B}  ${script.name}${R} (used ${script.usage_count || 1}x)`);
-        lines.push(`${D}  Template:${R}`);
-        lines.push(`${G}  ${script.template.slice(0, 300)}${R}`);
         if (script.parameters && script.parameters.length > 0) {
-          lines.push(`${Y}  Parameters:${R}`);
+          lines.push(`${Y}  Parameters to fill in:${R}`);
           for (const p of script.parameters) {
             lines.push(`${Y}    {{${p.name}}}: ${p.description} (default: ${p.default || "none"})${R}`);
           }
         }
+        lines.push(`${D}  ┌─ COMPLETE SCRIPT (copy-paste, replace {{params}}) ─┐${R}`);
+        lines.push(`${G}${script.template}${R}`);
+        lines.push(`${D}  └──────────────────────────────────────────────────┘${R}`);
         lines.push(``);
       }
-      lines.push(`${Y}${B}  ▶ Fill in {{parameters}} and reuse — no need to reconstruct.${R}`);
+      lines.push(`${Y}${B}  ▶ DO NOT recreate these scripts. Copy above, replace {{params}}, run.${R}`);
       lines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
     }
 
     // Record injection for double-block prevention
     try {
-      const state = readSessionState(projectRoot);
+      const state = readSessionState(root);
       state.lastInjection = { ts: Date.now(), query: query.slice(0, 100) };
       state.memoryCheck.lastCheckTs = Date.now();
-      writeSessionState(projectRoot, state);
+      writeSessionState(root, state);
     } catch {}
 
     return { systemMessage: lines.join("\n") };
@@ -315,7 +391,7 @@ function handlePreToolUse(input) {
 
   // Cache miss — try explorations + scripts fallback
   const fallbackLines = [];
-  const explorationHits = searchExplorations(query);
+  const explorationHits = searchExplorationsForProject(data, query);
   if (explorationHits.length > 0) {
     fallbackLines.push(`${C}${B}★ Past Exploration Found ───────────────────────${R}`);
     for (const hit of explorationHits) {
@@ -327,27 +403,37 @@ function handlePreToolUse(input) {
     fallbackLines.push(`${Y}${B}  ▶ Read the exploration file(s) above with the Read tool.${R}`);
     fallbackLines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
   }
-  const scriptResults = bm25Search(query, scriptBM25, 0.5, 2);
+  const scriptResults = bm25Search(query, data.scriptBM25, 0.5, 2);
   if (scriptResults.length > 0) {
-    const scriptMap = {}; for (const s of scripts) scriptMap[s.id] = s;
+    const scriptMap = {}; for (const s of data.scripts) scriptMap[s.id] = s;
     fallbackLines.push(``);
-    fallbackLines.push(`${C}${B}★ Reusable Scripts Found ───────────────────────${R}`);
+    fallbackLines.push(`${C}${B}★ REUSE THESE SCRIPTS — do NOT write new ones ──${R}`);
+    fallbackLines.push(`${Y}  IMPORTANT: These are complete, tested scripts. Use them AS-IS.${R}`);
+    fallbackLines.push(``);
     for (const { docId } of scriptResults) {
       const script = scriptMap[docId];
       if (!script) continue;
       fallbackLines.push(`${G}${B}  ${script.name}${R} (used ${script.usage_count || 1}x)`);
-      fallbackLines.push(`${G}  ${script.template.slice(0, 300)}${R}`);
+      if (script.parameters && script.parameters.length > 0) {
+        fallbackLines.push(`${Y}  Parameters to fill in:${R}`);
+        for (const p of script.parameters) {
+          fallbackLines.push(`${Y}    {{${p.name}}}: ${p.description} (default: ${p.default || "none"})${R}`);
+        }
+      }
+      fallbackLines.push(`${D}  ┌─ COMPLETE SCRIPT (copy-paste, replace {{params}}) ─┐${R}`);
+      fallbackLines.push(`${G}${script.template}${R}`);
+      fallbackLines.push(`${D}  └──────────────────────────────────────────────────┘${R}`);
       fallbackLines.push(``);
     }
-    fallbackLines.push(`${Y}${B}  ▶ Fill in {{parameters}} and reuse.${R}`);
+    fallbackLines.push(`${Y}${B}  ▶ DO NOT recreate. Copy above, replace {{params}}, run.${R}`);
     fallbackLines.push(`${C}${B}─────────────────────────────────────────────────${R}`);
   }
   if (fallbackLines.length > 0) return { systemMessage: fallbackLines.join("\n") };
 
   // Escalation check
-  const state = readSessionState(projectRoot);
+  const state = readSessionState(root);
   if (state.reminder.reminderCount > ESCALATION_THRESHOLD) {
-    const currentSaveTs = getLastSaveTs(projectRoot);
+    const currentSaveTs = getLastSaveTs(root);
     if (!(currentSaveTs > state.reminder.lastSaveTs)) {
       return {
         hookSpecificOutput: {
@@ -366,19 +452,23 @@ function handlePreToolUse(input) {
 // POST-TOOL-USE HANDLER
 // ══════════════════════════════════════════════════════════
 
-function handlePostToolUse(input) {
+function handlePostToolUse(projectRoot, input) {
+  const root = resolveProjectRoot(projectRoot, input);
+  const data = getOrLoadProject(root);
+  if (!data) return {};
+
   // Task completion tracking
   if (TASK_TOOLS.has(input.tool_name)) {
-    const state = readSessionState(projectRoot);
+    const state = readSessionState(root);
     const tracker = state.taskTracker;
     if (input.tool_name === "TaskCreate") {
       tracker.created += 1;
-      writeSessionState(projectRoot, state);
+      writeSessionState(root, state);
     } else if (input.tool_name === "TaskUpdate") {
       const status = (input.tool_input || {}).status;
       if (status === "completed") {
         tracker.completed += 1;
-        writeSessionState(projectRoot, state);
+        writeSessionState(root, state);
         if (tracker.completed >= tracker.created && tracker.created > 0) {
           const border = "\u2500".repeat(49);
           return { decision: "block", reason: [
@@ -391,7 +481,7 @@ function handlePostToolUse(input) {
         }
       } else if (status === "deleted") {
         tracker.created = Math.max(0, tracker.created - 1);
-        writeSessionState(projectRoot, state);
+        writeSessionState(root, state);
       }
     }
   }
@@ -400,9 +490,9 @@ function handlePostToolUse(input) {
   if (input.tool_name === "Bash" && isSelfCall(input)) return {};
 
   // Periodic checkpoint
-  const checkState = readSessionState(projectRoot);
+  const checkState = readSessionState(root);
   checkState.taskTracker.toolCallsSinceSummary += 1;
-  writeSessionState(projectRoot, checkState);
+  writeSessionState(root, checkState);
   if (checkState.taskTracker.toolCallsSinceSummary >= SUMMARY_CHECKPOINT_CALLS) {
     const border = "\u2500".repeat(49);
     return { decision: "block", reason: [
@@ -426,13 +516,39 @@ function handlePostToolUse(input) {
         description: toolInput.description || "", exitCode, success,
         exploratory: isExploratoryBash(input),
       };
-      shared.appendToolHistory(projectRoot, record);
+      shared.appendToolHistory(root, record);
       if (success) {
-        const capture = shared.detectAutoCapture(projectRoot, record);
+        const capture = shared.detectAutoCapture(root, record);
         if (capture) {
-          const saved = shared.autoSaveCapture(projectRoot, capture);
-          if (saved) log(`AUTO-CAPTURE: "${capture.topic}" (id: ${saved.id})`);
+          const saved = shared.autoSaveCapture(root, capture);
+          if (saved) logForProject(root, `AUTO-CAPTURE: "${capture.topic}" (id: ${saved.id})`);
         }
+      }
+
+      // Workflow chain detection — detect multi-step patterns for skill generation
+      if (success) {
+        try {
+          const chain = shared.extractChain(root, record);
+          if (chain && chain.length >= 2) {
+            const candidate = shared.matchOrCreateCandidate(root, chain, input.session_id);
+            if (candidate && (candidate.occurrences || []).length >= 2 && candidate.status === "candidate") {
+              shared.updateWorkflowCandidate(root, candidate.id, { status: "suggested" });
+              const stepNames = (candidate.steps || []).map(s => s.name).slice(0, 4).join(" → ");
+              const occCount = (candidate.occurrences || []).length;
+              logForProject(root, `WORKFLOW-SUGGESTED: "${candidate.name}" (${occCount}x)`);
+              // Return suggestion (non-blocking systemMessage)
+              return { systemMessage: [
+                `${C}${B}★ Skill Candidate Detected ─────────────────────${R}`,
+                `${G}${B}  "${candidate.name}"${R} (seen ${occCount}x across sessions)`,
+                `${G}  Steps: ${stepNames}${R}`,
+                ``,
+                `${Y}  To create a reusable /${candidate.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 30)} skill:${R}`,
+                `${Y}  node "${pluginRoot}/scripts/generate-skill.js" "${candidate.id}"${R}`,
+                `${C}${B}─────────────────────────────────────────────────${R}`,
+              ].join("\n") };
+            }
+          }
+        } catch {}
       }
     } catch {}
   }
@@ -447,17 +563,15 @@ function handlePostToolUse(input) {
     const breadcrumb = { tool: input.tool_name };
     if (input.tool_name === "Task") breadcrumb.subagent = toolInput.subagent_type || "unknown";
     if (input.tool_name === "Bash") breadcrumb.prompt = (toolInput.description || "").slice(0, 200);
-    shared.appendBreadcrumb(projectRoot, breadcrumb);
+    shared.appendBreadcrumb(root, breadcrumb);
   } catch {}
 
   // Exploration capture (writes to disk)
   if (input.tool_name === "Task" && isExploratoryTask(input)) {
     try {
-      // Delegate to post-tool-use captureExploration logic
       const postMod = require(path.join(__dirname, "..", "hooks", "scripts", "post-tool-use-capture.js"));
-      if (postMod && postMod.captureExploration) postMod.captureExploration(projectRoot, input);
+      if (postMod && postMod.captureExploration) postMod.captureExploration(root, input);
     } catch {
-      // Inline minimal capture
       try {
         let rawOutput = typeof input.tool_response === "string" ? input.tool_response : "";
         if (rawOutput.length >= 200) {
@@ -466,39 +580,35 @@ function handlePostToolUse(input) {
           const ts = new Date().toISOString();
           const toolInput = input.tool_input || {};
           const filename = `${ts.replace(/[:.]/g, "-").slice(0, 19)}_${shared.sanitizeFilename(toolInput.description || "")}_${id.slice(-6)}.md`;
-          const explDir = shared.ensureExplorationsDir(projectRoot);
+          const explDir = shared.ensureExplorationsDir(root);
           fs.writeFileSync(path.join(explDir, filename), rawOutput, "utf-8");
-          shared.appendExplorationIndex(projectRoot, {
+          shared.appendExplorationIndex(root, {
             id, ts, agent: toolInput.subagent_type || "unknown",
             query: (toolInput.prompt || "").slice(0, 300),
             tags: [], filename, charCount: rawOutput.length,
           });
-          log(`EXPLORATION-CAPTURE: ${id} chars=${rawOutput.length}`);
+          logForProject(root, `EXPLORATION-CAPTURE: ${id} chars=${rawOutput.length}`);
         }
       } catch {}
     }
   }
 
   // Immediate save tools blocking
-  const state = readSessionState(projectRoot);
+  const state = readSessionState(root);
   if (IMMEDIATE_SAVE_TOOLS.has(input.tool_name)) {
-    // Parallel Task skip
     if (input.tool_name === "Task" && state.taskTracker.created > 0 && state.taskTracker.completed < state.taskTracker.created) return {};
-    // Cooldown skip
     if (input.tool_name === "Task" && state.lastInjection && Date.now() - state.lastInjection.ts < 5000) return {};
-    // Double-block skip
     if (state.lastInjection && Date.now() - state.lastInjection.ts < 30000) {
       return { systemMessage: `${G}${B}★ Findings were injected — save any NEW discoveries when ready.${R}` };
     }
 
-    // Block
-    const currentSaveTs = getLastSaveTs(projectRoot);
+    const currentSaveTs = getLastSaveTs(root);
     if (currentSaveTs > state.reminder.lastSaveTs && state.reminder.lastSaveTs > 0) state.reminder.reminderCount = 0;
     state.reminder.reminderCount = ESCALATION_THRESHOLD + 1;
     state.reminder.ts = Date.now();
     state.reminder.lastSaveTs = Math.max(state.reminder.lastSaveTs, currentSaveTs);
     state.memoryCheck.lastCheckTs = 0;
-    writeSessionState(projectRoot, state);
+    writeSessionState(root, state);
 
     const memChecked = state.memoryCheck.lastCheckTs > 0;
     const checkLine = memChecked ? "" : `\n${M}${B}STEP 1: Check memory FIRST:${R}\n${M}  node "${pluginRoot}/scripts/check-memory.js" "keywords"${R}\n${M}${B}STEP 2: Save NEW discoveries:${R}`;
@@ -507,12 +617,12 @@ function handlePostToolUse(input) {
 
   // Gradual escalation for Bash
   if (Date.now() - state.reminder.ts < THROTTLE_MS) return {};
-  const currentSaveTs = getLastSaveTs(projectRoot);
+  const currentSaveTs = getLastSaveTs(root);
   if (currentSaveTs > state.reminder.lastSaveTs && state.reminder.lastSaveTs > 0) state.reminder.reminderCount = 0;
   state.reminder.reminderCount += 1;
   state.reminder.ts = Date.now();
   state.reminder.lastSaveTs = Math.max(state.reminder.lastSaveTs, currentSaveTs);
-  writeSessionState(projectRoot, state);
+  writeSessionState(root, state);
   if (state.reminder.reminderCount <= ESCALATION_THRESHOLD) return {};
 
   return { decision: "block", reason: `${M}${B}[project-memory] Researching ~${state.reminder.reminderCount * 3}+ min without saving!${R}\n${M}STOP and save your discoveries:${R}\n${M}- node "${pluginRoot}/scripts/save-decision.js" "<cat>" "<decision>" "<rationale>"${R}\n${M}- node "${pluginRoot}/scripts/save-research.js" "<topic>" "<tags>" "<finding>"${R}` };
@@ -523,9 +633,6 @@ function handlePostToolUse(input) {
 // ══════════════════════════════════════════════════════════
 
 function startServer() {
-  reload("all");
-  setupWatchers();
-
   const server = net.createServer((socket) => {
     lastActivity = Date.now();
     let data = "";
@@ -539,35 +646,36 @@ function startServer() {
 
         const t = Date.now();
         if (request.type === "pre-tool-use") {
-          response = handlePreToolUse(request.input || {});
+          response = handlePreToolUse(request.projectRoot, request.input || {});
         } else if (request.type === "post-tool-use") {
-          response = handlePostToolUse(request.input || {});
+          response = handlePostToolUse(request.projectRoot, request.input || {});
         } else if (request.type === "ping") {
-          response = { type: "pong", uptime: Math.round((Date.now() - startTime) / 1000), entries: research.length };
+          const totalEntries = Array.from(projects.values()).reduce((sum, p) => sum + p.research.length, 0);
+          response = { type: "pong", uptime: Math.round((Date.now() - startTime) / 1000), projects: projects.size, entries: totalEntries };
         }
         const elapsed = Date.now() - t;
-        log(`IPC ${request.type}: ${elapsed}ms`);
+        if (request.projectRoot) {
+          logForProject(request.projectRoot, `IPC ${request.type}: ${elapsed}ms`);
+        }
 
         socket.end(JSON.stringify(response) + "\n");
       } catch (err) {
-        log(`IPC-ERROR: ${err.message}`);
         socket.end(JSON.stringify({}) + "\n");
       }
     });
-    socket.on("error", () => {}); // ignore client disconnects
+    socket.on("error", () => {});
   });
 
   server.listen(0, "127.0.0.1", () => {
     const port = server.address().port;
     fs.writeFileSync(portFile, String(port), "utf-8");
     fs.writeFileSync(pidFile, String(process.pid), "utf-8");
-    log(`STARTED on 127.0.0.1:${port} (PID ${process.pid})`);
+    console.log(`Memory daemon started on 127.0.0.1:${port} (PID ${process.pid})`);
   });
 
   // Inactivity timeout
   setInterval(() => {
     if (Date.now() - lastActivity > INACTIVITY_TIMEOUT_MS) {
-      log(`SHUTDOWN: inactivity timeout (${Math.round(INACTIVITY_TIMEOUT_MS / 60000)} min)`);
       cleanup();
       process.exit(0);
     }
@@ -577,6 +685,15 @@ function startServer() {
   function cleanup() {
     try { fs.unlinkSync(portFile); } catch {}
     try { fs.unlinkSync(pidFile); } catch {}
+    // Unwatch all project files
+    for (const [, pData] of projects) {
+      try {
+        const files = ["research.jsonl", "scripts.jsonl", "graph.jsonl", path.join("explorations", "explorations.jsonl")];
+        for (const f of files) {
+          try { fs.unwatchFile(path.join(pData.memDir, f)); } catch {}
+        }
+      } catch {}
+    }
     server.close();
   }
   process.on("SIGTERM", () => { cleanup(); process.exit(0); });

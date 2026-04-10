@@ -9,6 +9,8 @@
 - Directory junction from plugin cache to source repo for permanent sync — CLAUDE_PLUGIN_ROOT resolves to cache copy regardless of installPath. Junction at cache/project-memory-marketplace/project-memory/1.0.0/ -> <USER_HOME>/project-memory makes all source edits instantly active in running hooks.
 - Separate script library from research: scripts.jsonl with parameterized templates — Auto-captured scripts (52% of research.jsonl) pollute BM25 search, drowning out real findings. Scripts need parameterization ({{build_id}}, {{log_id}}) for reuse. Separate store enables different search+injection UX.
 - Hook-based architecture creates synchronous performance bottlenecks: pre/post-tool-use fire on EVERY tool call (100+ per session). Critical path includes BM25 index rebuild, JSONL parsing, and multiple fs.readFileSync calls per invocation. Recommend: extract intent detection to shared module, cache keyword patterns, implement read-through cache for frequently accessed files. — Pre-tool-use.js performs 7+ fs.readFileSync ops per exploratory call (research.jsonl, config.json, graph.jsonl, .last-memory-check, .cache-hits, session registry). Post-tool-use.js writes to 3+ files per exploration. No caching between hook calls. Graph expansion disabled in hooks (hookExpansionDepth=1) but still reads graph.jsonl. With 100+ research entries and keyword pattern matching on every call, BM25 rebuilds entire inverted index each time.
+- DOM progress tracking belongs in platform-specific guard rails, not common execution service — Jagadish review: SubstrateLlmAssistedTestExecutionService is shared across all platforms/MCP clients. Guard rail's ApplyGuardRails receives executionHistory with DomXml per step, so it can detect stuck UI by examining history. Moved CheckDomProgressGuardRail + IsReadOnlyTool + ComputeSimpleHash to AndroidAppiumToolExecutionGuardRails.
+- Single daemon serving all projects via per-project data map — User wants one daemon process, not per-project daemons. Single daemon with Map<projectRoot, {research, bm25, graph, scripts, explorations}> to serve multiple sessions. Port file at ~/.ai-memory-daemon-port (global). Hooks pass projectRoot in IPC request.
 
 ## Constraint
 - Only store reusable scripts with real logic — not trivial one-liner commands — Commands like cat, grep, find, ls, head, tail, sed are general-purpose tools Claude can generate on-the-fly. isReusableScript() filters these out. Only multi-step scripts with auth, API calls, loops, or data processing pipelines are saved to scripts.jsonl.
@@ -30,9 +32,30 @@ grouping by category, and reproducing this exact format including this instructi
 
 ---
 
-## Research Findings Index (101 entries)
+## Research Findings Index (122 entries)
 | Topic | Tags | Staleness | Date |
 |-------|------|-----------|------|
+| Combined ado-build-analysis skill: 8 steps in 3 phases | skills, ado-build-analysis, combined | stable | 2026-03-18 |
+| 49 scripts across 2 projects group into 7 skill candidates | skills, scripts, analysis, candidates | stable | 2026-03-17 |
+| Auto skill generation pipeline: chain detection + workflow candidates + SKILL.md generation | skills, auto-generation, workflow, chain-detection | stable | 2026-03-17 |
+| Claude Code skill format: SKILL.md with YAML frontmatter | skills, claude-code, plugin, format | stable | 2026-03-17 |
+| Skills discovery and invocation mechanism | skill-discovery, slash-command-invocation, user-invocable, skill-resolution | stable | 2026-03-17 |
+| Plugin registration in settings.json | plugin-registration, settings.json, installed_plugins.json, enabledplugins | stable | 2026-03-17 |
+| Plugin structure and skill directory locations | plugin-structure, skills-directory, .claude-plugin, commands-directory | stable | 2026-03-17 |
+| Skill definition format and registration | skill-definition, skill.md, plugin-registration, /.slash-command | stable | 2026-03-17 |
+| Claude Code skills system | skill-definition, plugin-registration, slash-command | stable | 2026-03-17 |
+| Script injection fix: removed all truncation, show full templates with directive messaging | scripts, injection, truncation, daemon | stable | 2026-03-17 |
+| Single global daemon architecture: per-project Map with lazy loading | daemon, architecture, multi-project, global | stable | 2026-03-17 |
+| Daemon auto-start fails for non-plugin projects | daemon, session-start, bug, auto-start | stable | 2026-03-17 |
+| Daemon fallback bug: data never loaded when required as module | daemon, fallback, bug, lazy-load | stable | 2026-03-17 |
+| daemon-multi-project-refactor-requirements | daemon, multi-project, architecture, refactor, isolation | stable | 2026-03-17 |
+| daemon-module-exports-fallback-mode | daemon, exports, fallback, ipc-client | stable | 2026-03-17 |
+| daemon-findMemDir-session-registry-fallback | hooks, projectroot, fallback, cwd, session-registry | stable | 2026-03-17 |
+| daemon-server-startup-port-pid-files | daemon, tcp, port, pid, registration | stable | 2026-03-17 |
+| daemon-handlePreToolUse-handlePostToolUse-parameterization | daemon, handlers, projectroot, hooks, ipc | stable | 2026-03-17 |
+| daemon-architecture-projectRoot-flow | daemon, projectroot, architecture, ipc, fallback | stable | 2026-03-17 |
+| Unit test fixes: 5 bugs found and fixed in test suite | testing, unit-tests, fixes, windows | stable | 2026-03-17 |
+| Guard rail receives executionHistory with DomXml - can detect stuck UI from history | guard-rail, domxml, toolexecutionresult, executionhistory, architecture | stable | 2026-03-17 |
 | Daemon achieves 1-9ms processing, 14-100ms total hook time | daemon, performance, ipc, tcp, benchmark | stable | 2026-03-17 |
 | Daemon architecture for persistent in-memory caching | daemon, ipc, tcp, caching, performance | stable | 2026-03-17 |
 | data-files-pipeline | data, pipeline, indices, caches, files | stable | 2026-03-17 |
