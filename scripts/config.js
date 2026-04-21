@@ -22,6 +22,13 @@ const DEFAULTS = {
     enabled: true,
     model: "Xenova/all-MiniLM-L6-v2",
   },
+  quantization: {
+    enabled: true,         // Enable TurboQuant by default
+    bitWidth: 3,           // 2.5, 3, 4, or 8 bits per coordinate
+    useQJL: true,          // Enable QJL bias correction
+    seed: 0,               // Deterministic rotation matrix seed
+    targetReduction: 0.90, // Target 90% storage reduction (informational)
+  },
   bm25: {
     enabled: true,
     k1: 1.2,

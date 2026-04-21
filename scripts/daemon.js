@@ -20,6 +20,7 @@ const path = require("path");
 const net = require("net");
 
 const shared = require(path.join(__dirname, "shared.js"));
+const { EmbeddingCache } = require(path.join(__dirname, "embedding-cache.js"));
 const {
   ANSI, MATCHED_TOOLS, LIGHTWEIGHT_TOOLS, IMMEDIATE_SAVE_TOOLS, TASK_TOOLS,
   ESCALATION_THRESHOLD, THROTTLE_MS, SUMMARY_CHECKPOINT_CALLS,
@@ -68,6 +69,7 @@ function createEmptyProjectData(projectRoot) {
     config: {},
     watchersSetup: false,
     sourceWatcher: null,
+    embeddingCache: new EmbeddingCache({ enabled: true, bitWidth: 3, useQJL: true }),
   };
 }
 
@@ -119,7 +121,19 @@ function reloadProject(projectRoot, what) {
     try {
       const configMod = require(path.join(__dirname, "config.js"));
       data.config = configMod.readConfig(normalized);
+      // Re-initialize embedding cache with config settings
+      const qConfig = data.config.quantization || {};
+      data.embeddingCache = new EmbeddingCache({
+        enabled: qConfig.enabled !== false,
+        bitWidth: qConfig.bitWidth || 3,
+        useQJL: qConfig.useQJL !== false,
+        seed: qConfig.seed || 0,
+      });
     } catch { data.config = {}; }
+  }
+  if (what === "all" || what === "embeddings") {
+    // Load and cache embeddings if they exist
+    loadEmbeddingsIntoCache(normalized, data);
   }
   const elapsed = Date.now() - t;
   logForProject(normalized, `RELOAD ${what}: ${elapsed}ms (research=${data.research.length}, scripts=${data.scripts.length}, explorations=${data.explorations.length})`);
@@ -128,6 +142,30 @@ function reloadProject(projectRoot, what) {
 function logForProject(projectRoot, msg) {
   shared.debugLog(projectRoot, "DAEMON", msg);
 }
+
+function loadEmbeddingsIntoCache(projectRoot, data) {
+  const embPath = path.join(data.memDir, "embeddings.json");
+  if (!fs.existsSync(embPath)) return;
+  
+  try {
+    const embeddings = JSON.parse(fs.readFileSync(embPath, "utf-8"));
+    data.embeddingCache.clear();
+    
+    let cached = 0;
+    for (const [entryId, embedding] of Object.entries(embeddings)) {
+      if (Array.isArray(embedding) && embedding.length === 384) {
+        data.embeddingCache.cacheEmbedding(entryId, embedding, { ts: Date.now() });
+        cached++;
+      }
+    }
+    
+    const stats = data.embeddingCache.getStats();
+    logForProject(projectRoot, `Loaded ${cached} embeddings (${stats.compressionRatio}x compressed, ${stats.savingsPercent}% savings)`);
+  } catch (err) {
+    logForProject(projectRoot, `Failed to load embeddings: ${err.message}`);
+  }
+}
+
 
 // ── File watchers (per-project) ──
 function setupProjectWatchers(projectRoot) {
@@ -145,6 +183,7 @@ function setupProjectWatchers(projectRoot) {
   watch("scripts.jsonl", "scripts");
   watch("graph.jsonl", "graph");
   watch(path.join("explorations", "explorations.jsonl"), "explorations");
+  watch("embeddings.json", "embeddings");
 }
 
 // ── Source file watcher (incremental code graph updates) ──
@@ -288,6 +327,45 @@ function resolveProjectRoot(explicitRoot, input) {
   const cwd = (input && input.cwd) || process.cwd();
   return shared.findProjectRoot(cwd) || shared.scanHomeForProjects();
 }
+
+// ── Embedding search handler ──
+function handleEmbeddingSearch(projectRoot, input) {
+  const root = resolveProjectRoot(projectRoot, input);
+  const data = getOrLoadProject(root);
+  if (!data) return { results: [], error: "project not found" };
+  
+  const { entryId, topK = 5 } = input;
+  if (!entryId) return { results: [], error: "entryId required" };
+  
+  // Get the embedding for this entry
+  const queryEmbedding = data.embeddingCache.getEmbedding(entryId);
+  if (!queryEmbedding) return { results: [], error: `embedding not found for ${entryId}` };
+  
+  // Compute inner products with all cached embeddings
+  const scores = [];
+  for (const [id, ] of data.embeddingCache.cache) {
+    if (id === entryId) continue;
+    const score = data.embeddingCache.computeInnerProduct(entryId, id);
+    if (score !== null) {
+      scores.push({ id, score });
+    }
+  }
+  
+  // Sort by score descending
+  scores.sort((a, b) => b.score - a.score);
+  
+  // Return top-K
+  const results = scores.slice(0, topK).map(s => ({
+    id: s.id,
+    score: s.score,
+  }));
+  
+  return {
+    results,
+    stats: data.embeddingCache.getStats(),
+  };
+}
+
 
 // ══════════════════════════════════════════════════════════
 // PRE-TOOL-USE HANDLER
@@ -565,6 +643,8 @@ function startServer() {
           response = handlePreToolUse(request.projectRoot, request.input || {});
         } else if (request.type === "post-tool-use") {
           response = handlePostToolUse(request.projectRoot, request.input || {});
+        } else if (request.type === "embedding-search") {
+          response = handleEmbeddingSearch(request.projectRoot, request.input || {});
         } else if (request.type === "ping") {
           const totalEntries = Array.from(projects.values()).reduce((sum, p) => sum + p.research.length, 0);
           response = { type: "pong", uptime: Math.round((Date.now() - startTime) / 1000), projects: projects.size, entries: totalEntries };
