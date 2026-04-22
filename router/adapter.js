@@ -236,6 +236,9 @@ function fromCommon(common, format) {
 
 function commonToAnthropic(c) {
   const content = [];
+  if (typeof c.thinking === 'string' && c.thinking.length > 0) {
+    content.push({ type: 'thinking', thinking: c.thinking });
+  }
   if (c.content) content.push({ type: 'text', text: c.content });
   for (const tc of c.tool_calls || []) {
     let input = {};
@@ -302,6 +305,12 @@ function commonToResponses(c) {
 
 /**
  * Translate an Ollama native chat response to a CommonResponse.
+ *
+ * Ollama (>= 0.4) emits reasoning-model output (e.g. qwen3 family, deepseek-r1)
+ * with a separate `message.thinking` field that holds the chain-of-thought
+ * before the final `message.content`. We surface both, with a defensive
+ * type check + size cap so a buggy/hostile upstream cannot push non-strings
+ * or unbounded payloads through to downstream consumers.
  */
 function ollamaToCommon(resp) {
   const msg = resp.message || {};
@@ -321,7 +330,8 @@ function ollamaToCommon(resp) {
   return {
     id: 'msg_' + randomId(),
     model: resp.model,
-    content: msg.content || '',
+    content: typeof msg.content === 'string' ? msg.content : '',
+    thinking: capThinking(msg.thinking),
     tool_calls,
     stop_reason,
     usage: {
@@ -329,6 +339,17 @@ function ollamaToCommon(resp) {
       output_tokens: resp.eval_count || 0,
     },
   };
+}
+
+// Defensive cap on upstream-supplied thinking strings. 256 KB is well above
+// any realistic reasoning trace (qwen3 ~5 KB / response, deepseek-r1 ~30 KB)
+// but bounded enough to refuse a hostile/runaway local model that loops
+// forever or crafts a multi-MB thought to OOM the proxy or downstream client.
+const MAX_THINKING_BYTES = 256 * 1024;
+function capThinking(t) {
+  if (typeof t !== 'string') return '';
+  if (t.length > MAX_THINKING_BYTES) return t.slice(0, MAX_THINKING_BYTES) + '\n\n[…truncated by router]';
+  return t;
 }
 
 function randomId() {
@@ -583,16 +604,28 @@ const TRANSLATORS = {
   },
 
   // Ollama NDJSON → Anthropic SSE
+  // Mirrors the non-streaming path: if the upstream emits `message.thinking`
+  // (qwen3 / deepseek-r1 style reasoning models), surface it as an Anthropic
+  // `thinking` content block at index 0 and shift the text block to index 1.
+  // `started` only fires once on the first chunk; we delay it until we know
+  // whether the first chunk has thinking, content, or both.
   'ollama->anthropic'(opts) {
     const parse = makeNdjsonParser();
     const id = 'msg_' + randomId();
     let model = opts.model || '';
     let started = false;
+    let thinkingOpen = false;   // index 0 block currently open and accepting deltas
+    let textOpen = false;       // text block currently open
+    let textIndex = 0;          // 0 if no thinking, 1 if thinking emitted
+    let thinkingBytes = 0;
     return new Transform({
       transform(chunk, _, cb) {
         parse(chunk.toString('utf8'), (obj) => {
           model = obj.model || model;
-          const text = obj.message && obj.message.content;
+          const m = (obj && obj.message) || {};
+          const text = typeof m.content === 'string' ? m.content : '';
+          const thinking = typeof m.thinking === 'string' ? m.thinking : '';
+
           if (!started) {
             started = true;
             this.push(sseEvent('message_start', {
@@ -603,19 +636,65 @@ const TRANSLATORS = {
                 usage: { input_tokens: obj.prompt_eval_count || 0, output_tokens: 0 },
               },
             }));
-            this.push(sseEvent('content_block_start', {
-              type: 'content_block_start', index: 0,
-              content_block: { type: 'text', text: '' },
-            }));
           }
-          if (text) {
+
+          // Stream thinking deltas (open block lazily on first thinking chunk).
+          if (thinking && thinkingBytes < MAX_THINKING_BYTES) {
+            if (!thinkingOpen) {
+              thinkingOpen = true;
+              textIndex = 1;
+              this.push(sseEvent('content_block_start', {
+                type: 'content_block_start', index: 0,
+                content_block: { type: 'thinking', thinking: '' },
+              }));
+            }
+            const remaining = MAX_THINKING_BYTES - thinkingBytes;
+            const safe = thinking.length > remaining ? thinking.slice(0, remaining) : thinking;
+            thinkingBytes += safe.length;
             this.push(sseEvent('content_block_delta', {
               type: 'content_block_delta', index: 0,
+              delta: { type: 'thinking_delta', thinking: safe },
+            }));
+          }
+
+          // First chunk that carries actual content closes the thinking block (if any)
+          // and opens the text block. Subsequent text chunks just stream deltas.
+          if (text) {
+            if (thinkingOpen && !textOpen) {
+              this.push(sseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }));
+              thinkingOpen = false;
+            }
+            if (!textOpen) {
+              textOpen = true;
+              this.push(sseEvent('content_block_start', {
+                type: 'content_block_start', index: textIndex,
+                content_block: { type: 'text', text: '' },
+              }));
+            }
+            this.push(sseEvent('content_block_delta', {
+              type: 'content_block_delta', index: textIndex,
               delta: { type: 'text_delta', text },
             }));
           }
+
           if (obj.done) {
-            this.push(sseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }));
+            // Ensure whichever block is still open gets a clean stop event,
+            // otherwise Anthropic SDK clients treat the stream as malformed.
+            if (textOpen) {
+              this.push(sseEvent('content_block_stop', { type: 'content_block_stop', index: textIndex }));
+              textOpen = false;
+            } else if (thinkingOpen) {
+              this.push(sseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }));
+              thinkingOpen = false;
+            } else {
+              // No content at all — emit an empty text block so the SDK still sees
+              // a complete `[message_start, content_block_start, content_block_stop, …]` trace.
+              this.push(sseEvent('content_block_start', {
+                type: 'content_block_start', index: 0,
+                content_block: { type: 'text', text: '' },
+              }));
+              this.push(sseEvent('content_block_stop', { type: 'content_block_stop', index: 0 }));
+            }
             this.push(sseEvent('message_delta', {
               type: 'message_delta',
               delta: {
