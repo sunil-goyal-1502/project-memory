@@ -106,6 +106,19 @@ const home = process.env.USERPROFILE || process.env.HOME;
 const pluginsJson = path.join(home, ".claude", "plugins", "installed_plugins.json");
 const installDir = path.resolve(__dirname);
 
+// Derive PLUGIN_ID and version from .claude-plugin metadata so forks/renames
+// just work — no hardcoded "owner/name" strings tied to the upstream maintainer.
+let pluginId = "project-memory@project-memory-marketplace";
+let pluginVersion = "1.0.0";
+try {
+  const mp = JSON.parse(fs.readFileSync(path.join(installDir, ".claude-plugin", "marketplace.json"), "utf-8"));
+  const pl = JSON.parse(fs.readFileSync(path.join(installDir, ".claude-plugin", "plugin.json"), "utf-8"));
+  pluginId = pl.name + "@" + mp.name;
+  pluginVersion = pl.version || pluginVersion;
+} catch (e) {
+  console.log("  [WARN] Could not read .claude-plugin metadata; using defaults (" + e.message + ")");
+}
+
 // Ensure plugins directory exists
 fs.mkdirSync(path.dirname(pluginsJson), { recursive: true });
 
@@ -113,16 +126,16 @@ let data = { version: 2, plugins: {} };
 try { data = JSON.parse(fs.readFileSync(pluginsJson, "utf-8")); } catch {}
 if (!data.plugins) data.plugins = {};
 
-data.plugins["project-memory@project-memory-marketplace"] = [{
+data.plugins[pluginId] = [{
   scope: "user",
   installPath: installDir,
-  version: "1.0.0",
+  version: pluginVersion,
   installedAt: new Date().toISOString(),
   lastUpdated: new Date().toISOString()
 }];
 
 fs.writeFileSync(pluginsJson, JSON.stringify(data, null, 2), "utf-8");
-console.log("  ✓ Plugin registered at " + installDir);
+console.log("  ✓ Plugin registered as " + pluginId + " at " + installDir);
 console.log("  ✓ Config: " + pluginsJson);
 
 // Self-cleanup

@@ -81,16 +81,28 @@ const path = require("path");
 const home = process.env.USERPROFILE || process.env.HOME;
 const pj = path.join(home, ".claude", "plugins", "installed_plugins.json");
 const installDir = path.resolve(__dirname);
+// Derive PLUGIN_ID and version from .claude-plugin metadata so forks/renames
+// just work — no hardcoded "owner/name" strings tied to the upstream maintainer.
+let pluginId = "project-memory@project-memory-marketplace";
+let pluginVersion = "1.0.0";
+try {
+  const mp = JSON.parse(fs.readFileSync(path.join(installDir, ".claude-plugin", "marketplace.json"), "utf-8"));
+  const pl = JSON.parse(fs.readFileSync(path.join(installDir, ".claude-plugin", "plugin.json"), "utf-8"));
+  pluginId = pl.name + "@" + mp.name;
+  pluginVersion = pl.version || pluginVersion;
+} catch (e) {
+  console.log("  [WARN] Could not read .claude-plugin metadata; using defaults (" + e.message + ")");
+}
 fs.mkdirSync(path.dirname(pj), { recursive: true });
 let d = { version: 2, plugins: {} };
 try { d = JSON.parse(fs.readFileSync(pj, "utf-8")); } catch {}
 if (!d.plugins) d.plugins = {};
-d.plugins["project-memory@project-memory-marketplace"] = [{
-  scope: "user", installPath: installDir, version: "1.0.0",
+d.plugins[pluginId] = [{
+  scope: "user", installPath: installDir, version: pluginVersion,
   installedAt: new Date().toISOString(), lastUpdated: new Date().toISOString()
 }];
 fs.writeFileSync(pj, JSON.stringify(d, null, 2), "utf-8");
-console.log("  [OK] Plugin registered at " + installDir);
+console.log("  [OK] Plugin registered as " + pluginId + " at " + installDir);
 fs.unlinkSync(__filename);
 "@ | Set-Content $regScript -Encoding UTF8
 

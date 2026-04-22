@@ -12,7 +12,26 @@ const fs = require("fs");
 const path = require("path");
 
 const sourceDir = __dirname;
-const cacheBase = path.join(process.env.USERPROFILE || process.env.HOME, ".claude", "plugins", "cache", "project-memory-marketplace", "project-memory");
+
+// Read marketplace + plugin name from .claude-plugin metadata so cache path
+// stays in sync if the marketplace is renamed (e.g. when forking).
+function readPluginMeta() {
+  try {
+    const mp = JSON.parse(fs.readFileSync(path.join(sourceDir, ".claude-plugin", "marketplace.json"), "utf8"));
+    const pl = JSON.parse(fs.readFileSync(path.join(sourceDir, ".claude-plugin", "plugin.json"), "utf8"));
+    return { marketplaceName: mp.name, pluginName: pl.name };
+  } catch (e) {
+    console.error("Failed to read .claude-plugin metadata:", e.message);
+    process.exit(1);
+  }
+}
+const { marketplaceName, pluginName } = readPluginMeta();
+const homeDir = process.env.USERPROFILE || process.env.HOME;
+if (!homeDir) {
+  console.error("Cannot determine home directory (USERPROFILE/HOME not set)");
+  process.exit(1);
+}
+const cacheBase = path.join(homeDir, ".claude", "plugins", "cache", marketplaceName, pluginName);
 
 const filesToSync = [
   "hooks/scripts/pre-tool-use.js",

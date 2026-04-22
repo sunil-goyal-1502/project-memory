@@ -1140,8 +1140,54 @@ async function startServer() {
     process.exit(0);
   }
 
+  // ── Security: localhost-only access guard ───────────────────────────────
+  // The dashboard exposes cross-project memory data and a write endpoint, so
+  // we MUST refuse any request that didn't originate from this machine.
+  //
+  //   1. Bind socket to 127.0.0.1 (done at server.listen below)
+  //   2. Validate Host header against a strict allowlist — defends against
+  //      DNS-rebinding attacks where a malicious public site resolves its
+  //      hostname to 127.0.0.1 and the victim's browser dutifully forwards
+  //      the request to the local dashboard with the attacker's Origin.
+  //   3. Browser-borne requests must come from a same-origin page; reject
+  //      any request that carries a foreign Origin header. CLI/curl
+  //      requests have no Origin, which is fine.
+  //   4. Drop the wildcard CORS header entirely. The dashboard UI is served
+  //      from the same origin as the API, so no cross-origin access is ever
+  //      legitimate.
+  const ALLOWED_HOSTS = new Set([
+    `127.0.0.1:${PORT}`,
+    `localhost:${PORT}`,
+    `[::1]:${PORT}`,
+  ]);
+  function verifyLocalRequest(req, res) {
+    const host = (req.headers.host || "").toLowerCase();
+    if (!ALLOWED_HOSTS.has(host)) {
+      res.writeHead(403, { "Content-Type": "text/plain" });
+      res.end("Forbidden: dashboard accepts requests only via 127.0.0.1/localhost");
+      return false;
+    }
+    const origin = req.headers.origin;
+    if (origin) {
+      const allowedOrigins = new Set([
+        `http://127.0.0.1:${PORT}`,
+        `http://localhost:${PORT}`,
+        `http://[::1]:${PORT}`,
+      ]);
+      if (!allowedOrigins.has(origin.toLowerCase())) {
+        res.writeHead(403, { "Content-Type": "text/plain" });
+        res.end("Forbidden: cross-origin requests are not permitted");
+        return false;
+      }
+    }
+    return true;
+  }
+
   const server = http.createServer(async (req, res) => {
-    const headers = { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" };
+    if (!verifyLocalRequest(req, res)) return;
+    // Same-origin only — no wildcard CORS. The dashboard UI is served from
+    // the same origin as the API, so cross-origin access is never legitimate.
+    const headers = { "Content-Type": "application/json" };
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
     if (url.pathname === "/api/data") {
@@ -1208,9 +1254,23 @@ async function startServer() {
       res.end(GRAPH_VIZ_HTML);
 
     } else if (url.pathname === "/api/session-event" && req.method === "POST") {
+      // Cap body size to defeat memory-exhaustion writes from a buggy/hostile
+      // local client (Host check above already prevents remote callers).
+      const MAX_BODY = 64 * 1024; // 64 KB is plenty for a session event
       let body = "";
-      req.on("data", c => body += c);
+      let aborted = false;
+      req.on("data", (c) => {
+        if (aborted) return;
+        body += c;
+        if (body.length > MAX_BODY) {
+          aborted = true;
+          res.writeHead(413, { "Content-Type": "text/plain" });
+          res.end("Payload too large");
+          req.destroy();
+        }
+      });
       req.on("end", () => {
+        if (aborted) return;
         try { recordSessionEvent(JSON.parse(body)); } catch {}
         res.writeHead(200); res.end("ok");
       });
@@ -1254,7 +1314,7 @@ async function startServer() {
     return { query, results: scored.filter(e => e._score > 5) }; // filter out noise below 5%
   }
 
-  server.listen(PORT, () => {
+  server.listen(PORT, "127.0.0.1", () => {
     // Write PID file for lifecycle management
     try { fs.writeFileSync(PID_FILE, String(process.pid), "utf-8"); } catch {}
 
@@ -1268,9 +1328,19 @@ async function startServer() {
 
     // Open browser only in foreground mode (not when spawned by hooks)
     if (!process.env.DASHBOARD_NO_BROWSER) {
-      const { exec } = require("child_process");
-      const cmd = process.platform === "win32" ? `start ${url}` : process.platform === "darwin" ? `open ${url}` : `xdg-open ${url}`;
-      exec(cmd, () => {});
+      const { spawn } = require("child_process");
+      // Use spawn (no shell) to eliminate any chance of metacharacter injection
+      // via the URL string. Args are passed as discrete argv entries.
+      try {
+        if (process.platform === "win32") {
+          // `start` is a cmd.exe builtin; first quoted arg is the window title.
+          spawn("cmd.exe", ["/c", "start", "", url], { detached: true, stdio: "ignore" }).unref();
+        } else if (process.platform === "darwin") {
+          spawn("open", [url], { detached: true, stdio: "ignore" }).unref();
+        } else {
+          spawn("xdg-open", [url], { detached: true, stdio: "ignore" }).unref();
+        }
+      } catch { /* best-effort — browser open is non-critical */ }
     }
   });
 

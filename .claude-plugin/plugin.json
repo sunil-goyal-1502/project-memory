@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Automatic project decision and research capture with cross-tool context sync",
   "author": {
-    "name": "sungoyal"
+    "name": "project-memory contributors"
   },
   "license": "MIT",
   "keywords": ["memory", "context", "decisions", "research", "copilot", "cursor"]

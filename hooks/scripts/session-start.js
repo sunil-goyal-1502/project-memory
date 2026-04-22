@@ -15,18 +15,40 @@ const path = require("path");
 // ── Self-healing: ensure plugin cache junction exists ──
 // CLAUDE_PLUGIN_ROOT resolves to cache path which gets wiped on updates.
 // This repairs the junction at startup so plugin-framework hooks also work.
+// Marketplace + plugin name are read from .claude-plugin metadata so this
+// works after a fork/rename without code changes.
+function readPluginMeta(repoRoot) {
+  try {
+    const mp = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude-plugin", "marketplace.json"), "utf8"));
+    const pl = JSON.parse(fs.readFileSync(path.join(repoRoot, ".claude-plugin", "plugin.json"), "utf8"));
+    return { marketplaceName: mp && mp.name, pluginName: pl && pl.name, version: (pl && pl.version) || "1.0.0" };
+  } catch { return null; }
+}
 function ensureCacheJunction() {
   try {
+    if (process.platform !== "win32") return; // junction is Windows-only
     const home = process.env.USERPROFILE || process.env.HOME;
     if (!home) return;
     const sourceRepo = path.resolve(__dirname, "..", "..");
-    const cacheLink = path.join(home, ".claude", "plugins", "cache", "project-memory-marketplace", "project-memory", "1.0.0");
+    const meta = readPluginMeta(sourceRepo);
+    if (!meta || !meta.marketplaceName || !meta.pluginName) return;
+    // Defense-in-depth: validate metadata against a strict allowlist before
+    // using it in a shell-style mklink call. Rejects anything that could
+    // smuggle path traversal or cmd metacharacters.
+    const SAFE = /^[A-Za-z0-9._-]+$/;
+    if (!SAFE.test(meta.marketplaceName) || !SAFE.test(meta.pluginName) || !SAFE.test(meta.version)) {
+      return;
+    }
+    const cacheLink = path.join(home, ".claude", "plugins", "cache", meta.marketplaceName, meta.pluginName, meta.version);
     // Quick check: does the junction already resolve?
     if (fs.existsSync(path.join(cacheLink, "hooks", "hooks.json"))) return;
     // Create parent dirs + junction
     fs.mkdirSync(path.dirname(cacheLink), { recursive: true });
-    require("child_process").execSync(
-      'cmd /c mklink /J "' + cacheLink + '" "' + sourceRepo + '"',
+    // Use spawnSync with discrete argv (no shell concat) — even though we've
+    // validated the inputs above, this removes the entire injection class.
+    require("child_process").spawnSync(
+      "cmd.exe",
+      ["/c", "mklink", "/J", cacheLink, sourceRepo],
       { windowsHide: true, stdio: "ignore" }
     );
   } catch { /* best-effort, non-critical */ }

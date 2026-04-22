@@ -21,10 +21,39 @@ from pathlib import Path
 
 # ─── Constants ───────────────────────────────────────────────────────────────
 
-PLUGIN_ID = "project-memory@project-memory-marketplace"
+# Derive PLUGIN_ID from .claude-plugin metadata so forks/renames Just Work.
+def _read_plugin_id():
+    here = Path(__file__).resolve().parent
+    try:
+        mp = json.loads((here / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+        pl = json.loads((here / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        return f"{pl['name']}@{mp['name']}", pl.get("version", "1.0.0")
+    except Exception as e:
+        print(f"WARNING: Could not read .claude-plugin metadata ({e}); falling back to defaults", file=sys.stderr)
+        return "project-memory@project-memory-marketplace", "1.0.0"
+
+PLUGIN_ID, PLUGIN_VERSION = _read_plugin_id()
 MCP_SERVER_KEY = "project-memory"
-PLUGIN_VERSION = "1.0.0"
-REPO_URL = "https://github.com/sunil-goyal-1502/project-memory.git"
+
+# REPO_URL is used only when the user runs install.py without first cloning.
+# Priority: env var > git remote of this checkout > None (will prompt).
+def _detect_repo_url():
+    env = os.environ.get("PROJECT_MEMORY_REPO_URL")
+    if env:
+        return env
+    try:
+        here = Path(__file__).resolve().parent
+        result = subprocess.run(
+            ["git", "-C", str(here), "config", "--get", "remote.origin.url"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+REPO_URL = _detect_repo_url()
 
 HOOKS = [
     ("SessionStart", "hooks/scripts/session-start.js", 5),
@@ -270,6 +299,9 @@ def determine_install_path():
         return default_path
 
     print(f"  Cloning {REPO_URL} to {default_path}...")
+    if not REPO_URL:
+        print_err("No REPO_URL detected. Set PROJECT_MEMORY_REPO_URL or clone the repo manually first.")
+        return None
     result = run_cmd(["git", "clone", REPO_URL, str(default_path)], capture=False)
     if result and result.returncode == 0:
         print_ok(f"Cloned to: {default_path}")
@@ -471,7 +503,7 @@ def init_ai_memory(install_path):
 
 
 def build_code_graph(install_path):
-    print_step(8, 8, "Building code graph")
+    print_step(8, 9, "Building code graph")
 
     build_script = install_path / "scripts" / "build-code-graph.js"
     if not build_script.is_file():
@@ -489,6 +521,160 @@ def build_code_graph(install_path):
 
     print_warn("Code graph build had issues (non-fatal)")
     return True  # Non-fatal
+
+
+# ─── AI Router Setup (optional) ─────────────────────────────────────────────
+
+
+ROUTER_RECOMMENDED_MODELS = [
+    ("llama3.2:3b", "general chat (TIER_SIMPLE) — ~2 GB"),
+    ("nomic-embed-text", "embeddings (TIER_EMBED) — ~275 MB"),
+    ("qwen2.5-coder:7b", "code-heavy tasks (TIER_CODE) — ~4.5 GB"),
+]
+
+ROUTER_DEFAULT_CONFIG = {
+    "router_port": 8081,
+    "router_mode": "balanced",
+    "router_privacy_mode": False,
+    "router_fallback_on_low_confidence": True,
+    "router_route_embeddings": True,
+    "ollama_url": "http://127.0.0.1:11434",
+    "tier_simple": "llama3.2:3b",
+    "tier_complex": None,
+    "tier_code": "qwen2.5-coder:7b",
+    "tier_embed": "nomic-embed-text",
+    "anthropic_upstream_url": "https://api.anthropic.com",
+    "openai_upstream_url": "https://api.openai.com",
+    "router_cache_ttl_hours": 24,
+    "router_cache_semantic_threshold": 0.92,
+}
+
+
+def check_ollama():
+    """Return Ollama version string, or None if not installed/reachable."""
+    return cmd_version("ollama")
+
+
+def list_ollama_models():
+    """Return list of installed Ollama model names, or [] on error."""
+    result = run_cmd(["ollama", "list"])
+    if not result or result.returncode != 0:
+        return []
+    lines = (result.stdout or "").strip().splitlines()
+    if len(lines) <= 1:
+        return []
+    # First line is header; subsequent lines: NAME  ID  SIZE  MODIFIED
+    names = []
+    for line in lines[1:]:
+        parts = line.split()
+        if parts:
+            names.append(parts[0])
+    return names
+
+
+def write_router_config(router_dir):
+    """Write default ~/.ai-router/config.json if missing. Returns the file path."""
+    router_dir.mkdir(parents=True, exist_ok=True)
+    config_file = router_dir / "config.json"
+    if config_file.exists():
+        print_ok(f"Existing config preserved: {config_file}")
+        return config_file
+    write_json(config_file, ROUTER_DEFAULT_CONFIG)
+    print_ok(f"Wrote default config: {config_file}")
+    return config_file
+
+
+def pull_ollama_model(model):
+    """Pull an Ollama model. Streams output (large download)."""
+    print(f"  -> Pulling {model} (this can take several minutes)...")
+    result = run_cmd(["ollama", "pull", model], capture=False)
+    if result and result.returncode == 0:
+        print_ok(f"Pulled {model}")
+        return True
+    print_warn(f"Failed to pull {model} (you can run 'ollama pull {model}' later)")
+    return False
+
+
+def setup_ai_router(install_path):
+    """
+    Step 9: Optional AI Router setup.
+
+    - Detects Ollama. If absent, prints install hint and skips.
+    - Writes ~/.ai-router/config.json with sensible defaults (no overwrite).
+    - Optionally pulls recommended models per tier.
+    - Prints integration snippets.
+
+    No new npm packages are required — the router uses dependencies already
+    installed by `npm install` (better-sqlite3, @huggingface/transformers).
+    """
+    print_step(9, 9, "Configuring AI Router (optional, local-first LLM proxy)")
+
+    if not (install_path / "router" / "index.js").is_file():
+        print_warn("router/ not present in this checkout — skipping")
+        return True
+
+    ollama_version = check_ollama()
+    if not ollama_version:
+        print_warn("Ollama not found on PATH.")
+        print(
+            "    Install from https://ollama.com/download to enable local-first "
+            "routing,\n    then re-run this installer or just run 'ollama pull "
+            "llama3.2:3b'."
+        )
+        print_ok("Skipping router setup (router can be enabled later)")
+        return True
+
+    print_ok(f"Ollama detected: {ollama_version}")
+
+    if not prompt_yn(
+        "  Configure AI Router now (writes ~/.ai-router/config.json)?",
+        default=True,
+    ):
+        print_ok("Skipped router setup")
+        return True
+
+    router_dir = Path.home() / ".ai-router"
+    write_router_config(router_dir)
+
+    installed = set(list_ollama_models())
+    missing = [
+        (m, desc)
+        for m, desc in ROUTER_RECOMMENDED_MODELS
+        if not any(m == name or name.startswith(m + ":") for name in installed)
+    ]
+
+    if missing:
+        print()
+        print("  Recommended Ollama models not yet installed:")
+        for m, desc in missing:
+            print(f"    - {m:<22} {desc}")
+        if prompt_yn(
+            "  Pull these models now? (large downloads; you can defer)",
+            default=False,
+        ):
+            for m, _ in missing:
+                pull_ollama_model(m)
+        else:
+            print_ok(
+                "Skipped model pull — fetch later with 'ollama pull <model>'"
+            )
+    else:
+        print_ok("All recommended Ollama models already installed")
+
+    print()
+    print("  To start the router:")
+    print(f"    cd {install_path}")
+    print("    npm run router:start         # or: node router/index.js")
+    print()
+    print("  Then point your client at it:")
+    print("    export ANTHROPIC_BASE_URL=http://localhost:8081")
+    print("    export OPENAI_BASE_URL=http://localhost:8081/v1")
+    print()
+    print("  Documentation:")
+    print(f"    {install_path / 'ROUTER.md'}")
+    print(f"    {install_path / 'docs' / 'router-integration.md'}")
+
+    return True
 
 
 # ─── Install Entrypoint ─────────────────────────────────────────────────────
@@ -532,6 +718,9 @@ def install():
     # Step 8
     build_code_graph(install_path)  # Non-fatal
 
+    # Step 9
+    setup_ai_router(install_path)  # Non-fatal
+
     # Summary
     print("\n" + "=" * 60)
     print("  Installation complete!")
@@ -540,6 +729,11 @@ def install():
     print(f"  Plugin ID:     {PLUGIN_ID}")
     print(f"  Hooks:         {len(HOOKS)} registered in settings.json")
     print(f"  MCP server:    {MCP_SERVER_KEY} in settings.json")
+    router_config = Path.home() / ".ai-router" / "config.json"
+    if router_config.is_file():
+        print(f"  AI Router:     enabled (config at {router_config})")
+    else:
+        print(f"  AI Router:     not configured (run installer again or see ROUTER.md)")
     print(f"\n  -> Restart Claude Code to activate project-memory")
     print()
     return True

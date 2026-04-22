@@ -2,7 +2,7 @@
   "mcpServers": {
     "project-memory": {
       "command": "node",
-      "args": ["<USER_HOME>/project-memory/scripts/mcp-server.mjs"]
+      "args": ["scripts/mcp-server.mjs"]
     }
   }
 }

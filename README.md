@@ -1,6 +1,16 @@
 # Project Memory
 
-A Claude Code plugin that gives Claude **persistent memory across sessions** and **structural code understanding**. Instead of re-reading 50+ files every session, Claude uses an MCP server with 11 on-demand tools, a SQLite code graph, and hybrid BM25 + ONNX search to answer questions in ~500 tokens instead of ~100K.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+A Claude Code plugin that gives Claude **persistent memory across sessions**, **structural code understanding**, **compressed embeddings**, and an **optional local-first LLM router**. Instead of re-reading 50+ files every session, Claude uses an MCP server with 11 on-demand tools, a SQLite code graph, hybrid BM25 + ONNX search with 90%-quantized vectors, and can route simple requests to a local Ollama model — answering questions in ~500 tokens instead of ~100K and shifting 35–55% of a coding session off the cloud entirely.
+
+**Three layers of savings, stackable:**
+
+| Layer | What it saves | Savings |
+|-------|---------------|---------|
+| **MCP tools + code graph** | Cloud input tokens (no more reading 50 files) | 85–99% per query |
+| **TurboQuant embeddings** | Local memory + disk for the embedding cache | 90% (1,536 → 144 bytes per vector) |
+| **AI Router (optional)** | Cloud output tokens (simple work runs on local Ollama) | 35–55% of total session spend |
 
 ## The Problem: Token Waste in AI Coding Sessions
 
@@ -110,8 +120,10 @@ mcp__project-memory__script_search query="ADO build timeline"
 | Recall a past decision | ~2,500 | ~200 | 92% |
 | Reuse a complex script | ~2,000 | ~300 | 85% |
 | Start-of-session context load | ~50,000 | ~100 | 99.8% |
+| Embedding cache footprint (100 vecs) | 153 KB | 14.4 KB | 90% (TurboQuant) |
+| Cloud LLM spend (typical session) | 100% | 45–65% | 35–55% (AI Router) |
 
-The `get_context` entry point returns ~100 tokens. Claude only escalates to deeper queries when needed, keeping most interactions lightweight.
+The `get_context` entry point returns ~100 tokens. Claude only escalates to deeper queries when needed, keeping most interactions lightweight. With the optional AI Router enabled, simple requests, embeddings, and short-completion tasks are served locally by Ollama — only complex reasoning hits the cloud.
 
 ## How It Works
 

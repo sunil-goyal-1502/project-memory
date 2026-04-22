@@ -3,6 +3,12 @@
   "version": "1.0.0",
   "private": true,
   "description": "Automatic project decision and research capture with cross-tool context sync",
+  "license": "MIT",
+  "author": "project-memory contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/sunil-goyal-1502/project-memory.git"
+  },
   "scripts": {
     "router:start": "node router/index.js",
     "test:router": "node test/router/run-all.js",
