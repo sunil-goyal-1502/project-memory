@@ -3,6 +3,16 @@
   "version": "1.0.0",
   "private": true,
   "description": "Automatic project decision and research capture with cross-tool context sync",
+  "scripts": {
+    "router:start": "node router/index.js",
+    "test:router": "node test/router/run-all.js",
+    "test:router:no-bench": "node test/router/run-all.js --no-bench",
+    "bench:router": "node test/router/benchmark.js",
+    "docs:router": "node scripts/gen-router-api-coverage.js"
+  },
+  "bin": {
+    "ai-router": "router/cli.js"
+  },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
     "@modelcontextprotocol/sdk": "^1.29.0",

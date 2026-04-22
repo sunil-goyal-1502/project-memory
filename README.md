@@ -225,6 +225,16 @@ Session End
 
 Every response includes `_hints.next_steps` guiding Claude to the right follow-up tool.
 
+### AI Router (local-first LLM proxy)
+
+Optional sibling component (`router/`) that proxies Anthropic, OpenAI, and
+Codex traffic on `http://localhost:8081` and serves the simple/embedding
+slices from a local Ollama model — typically 35–55 % of a coding session
+costs zero cloud tokens. Wire-format compatible with Claude Code, Copilot
+CLI, Codex CLI, Cursor, and the OpenAI/Anthropic SDKs. See
+[`ROUTER.md`](ROUTER.md) for setup and [`docs/router-integration.md`](docs/router-integration.md)
+for per-client snippets.
+
 ### Code Graph (SQLite + tree-sitter)
 
 Parses your codebase into a searchable graph of functions, classes, and their relationships:
