@@ -228,8 +228,9 @@ async function main() {
   // On Windows, hook subprocess cwd can be C:\WINDOWS\system32 instead of
   // the project directory. Session-start gets the correct cwd, so we persist
   // it for PreToolUse/PostToolUse to look up by session_id.
+  const SAFE_SID = /^[A-Za-z0-9_-]{1,128}$/;
   const sessionId = input.session_id;
-  if (sessionId) {
+  if (sessionId && SAFE_SID.test(String(sessionId))) {
     const sessDir = path.join(
       process.env.USERPROFILE || process.env.HOME || "/tmp",
       ".ai-memory-sessions"
@@ -294,40 +295,46 @@ async function main() {
   } catch { /* purging is best-effort */ }
 
   // ── Background services (non-blocking) ──
+  // SECURITY: ALL background scripts resolve from pluginRoot (the project-memory
+  // install location), NEVER from projectRoot. Otherwise opening any malicious
+  // repo with a planted scripts/intent-classifier.js (or build-embeddings.js or
+  // dashboard.js) would execute attacker code at session-start with the user's
+  // full privileges — drive-by RCE.
+  const pluginRoot = path.resolve(__dirname, "..", "..");
   try {
     const { spawn } = require("child_process");
 
     // Build intent classifier reference embeddings (if not cached)
-    const classifierScript = path.join(projectRoot, "scripts", "intent-classifier.js");
+    const classifierScript = path.join(pluginRoot, "scripts", "intent-classifier.js");
     if (fs.existsSync(classifierScript) && !fs.existsSync(path.join(projectRoot, ".ai-memory", ".intent-embeddings.json"))) {
       const child0 = spawn(process.execPath, [classifierScript, "--build"], {
-        detached: true, stdio: "ignore", windowsHide: true, cwd: projectRoot,
+        detached: true, stdio: "ignore", windowsHide: true, cwd: pluginRoot,
       });
       child0.unref();
     }
 
     // Build embeddings globally (all projects with .ai-memory)
-    const buildScript = path.join(projectRoot, "scripts", "build-embeddings.js");
+    const buildScript = path.join(pluginRoot, "scripts", "build-embeddings.js");
     if (fs.existsSync(buildScript)) {
       const child = spawn(process.execPath, [buildScript, "--all"], {
         detached: true, stdio: "ignore", windowsHide: true,
-        cwd: projectRoot,
+        cwd: pluginRoot,
       });
       child.unref();
     }
 
     // Auto-start global dashboard (skips if already running)
-    const dashboardScript = path.join(projectRoot, "scripts", "dashboard.js");
+    const dashboardScript = path.join(pluginRoot, "scripts", "dashboard.js");
     if (fs.existsSync(dashboardScript)) {
       const child2 = spawn(process.execPath, [dashboardScript, "--background"], {
         detached: true, stdio: "ignore", windowsHide: true,
         env: { ...process.env, DASHBOARD_NO_BROWSER: "1" },
+        cwd: pluginRoot,
       });
       child2.unref();
     }
 
     // Start global memory daemon if not already running (single daemon serves all projects)
-    const pluginRoot = path.resolve(__dirname, "..", "..");
     const daemonScript = path.join(pluginRoot, "scripts", "daemon.js");
     const daemonHome = process.env.USERPROFILE || process.env.HOME || "";
     const daemonPidFile = path.join(daemonHome, ".ai-memory-daemon-pid");

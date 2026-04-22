@@ -38,10 +38,14 @@ async function main() {
   const transcriptPath = input.transcript_path;
   const sessionId = input.session_id;
 
+  // Validate session_id to prevent path traversal in session registry path
+  const SAFE_SID = /^[A-Za-z0-9_-]{1,128}$/;
+  const sessionIdSafe = sessionId && SAFE_SID.test(String(sessionId)) ? sessionId : null;
+
   // Read session registry BEFORE cleaning it up (need it for fallback)
   let registeredRoot = null;
-  const sessFile = sessionId
-    ? path.join(process.env.USERPROFILE || process.env.HOME || "/tmp", ".ai-memory-sessions", sessionId)
+  const sessFile = sessionIdSafe
+    ? path.join(process.env.USERPROFILE || process.env.HOME || "/tmp", ".ai-memory-sessions", sessionIdSafe)
     : null;
   if (sessFile) {
     try {
@@ -173,8 +177,20 @@ async function main() {
     process.exit(0);
   }
 
+  // SECURITY: transcript_path is attacker-controlled (from stdin). Refuse
+  // anything outside the user's ~/.claude/ tree to stop the hook from
+  // slurping arbitrary files (e.g. ~/.aws/credentials) into .last-session.txt.
+  const claudeHome = path.resolve(
+    path.join(process.env.USERPROFILE || process.env.HOME || "", ".claude")
+  );
+  const resolvedTranscript = path.resolve(transcriptPath);
+  if (!resolvedTranscript.startsWith(claudeHome + path.sep)) {
+    process.stdout.write(JSON.stringify({}));
+    process.exit(0);
+  }
+
   try {
-    const condensed = condenseTranscript(transcriptPath);
+    const condensed = condenseTranscript(resolvedTranscript);
     if (condensed && condensed.trim().length > 0) {
       const outputPath = path.join(
         projectRoot,

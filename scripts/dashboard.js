@@ -515,7 +515,7 @@ async function doSemanticSearch(query){
           +'<div class="entry-meta">'+proj+'<span>'+(e.ts?e.ts.substring(0,10):'')+'</span></div></div>';
       }
     }).join('')+'</div>';
-  }catch(err){document.getElementById('searchResults').innerHTML='<div class="empty">Failed: '+err.message+'</div>';}
+  }catch(err){document.getElementById('searchResults').innerHTML='<div class="empty">Failed: '+esc(err.message||String(err))+'</div>';}
 }
 
 function goPage(tab,page){currentPage[tab]=page;render();}
@@ -820,7 +820,7 @@ async function fetchData(){
     currentData=await r.json();
     try{render();}catch(renderErr){
       console.error('Render error:',renderErr);
-      document.getElementById('tabContent').innerHTML='<div class="empty" style="color:var(--red)">Render error: '+renderErr.message+'</div>';
+      document.getElementById('tabContent').innerHTML='<div class="empty" style="color:var(--red)">Render error: '+esc(renderErr.message||String(renderErr))+'</div>';
     }
   }catch(e){console.error('Fetch failed:',e);}
 }
@@ -1271,7 +1271,24 @@ async function startServer() {
       });
       req.on("end", () => {
         if (aborted) return;
-        try { recordSessionEvent(JSON.parse(body)); } catch {}
+        try {
+          const parsed = JSON.parse(body);
+          // SECURITY: whitelist only known event fields and trim them. Without
+          // this, any local caller could append arbitrary keys (or huge
+          // strings) into session-history.jsonl and pollute the dashboard UI.
+          if (parsed && typeof parsed === "object") {
+            const STR = (v, max) => typeof v === "string" ? v.slice(0, max || 256) : "";
+            const safe = {
+              event: STR(parsed.event, 64),
+              ts: STR(parsed.ts, 64),
+              sessionId: STR(parsed.sessionId, 128),
+              project: STR(parsed.project, 512),
+              tool: STR(parsed.tool, 64),
+              summary: STR(parsed.summary, 1024),
+            };
+            recordSessionEvent(safe);
+          }
+        } catch {}
         res.writeHead(200); res.end("ok");
       });
     } else {

@@ -637,10 +637,77 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
   return { tools: TOOLS };
 });
 
+// SECURITY: cap MCP tool argument size. Without this, an over-eager (or
+// malicious) caller could push very large strings through the dispatch path
+// and exhaust memory inside handlers (BM25 build, embeddings search, …).
+//
+// Sizing rationale:
+//   - Short query/identifier fields (`query`, `qualified_name`, `entity`,
+//     `target`, `tags`) are capped at 4 KB — far above realistic usage.
+//   - Long content fields used by `memory_save` (`content`, `topic`,
+//     `entities`) accept up to 64 KB so legitimate research findings (the
+//     largest in this repo today is ~4 KB; deep technical writeups can hit
+//     20-40 KB) are not silently truncated.
+//   - Anything over the cap raises an error so the caller sees the failure
+//     instead of silently losing data.
+const MAX_ARG_STRING = 4096;            // default for all string args
+const MAX_LONG_ARG_STRING = 64 * 1024;  // for fields listed in LONG_STRING_KEYS
+const MAX_ARG_DEPTH = 6;
+const LONG_STRING_KEYS = new Set(["content", "topic", "entities", "rationale", "finding", "decision"]);
+
+class ArgValidationError extends Error {
+  constructor(msg) { super(msg); this.code = "ARG_TOO_LARGE"; }
+}
+
+function validateArgs(args, depth = 0, parentKey = null) {
+  if (args == null) return args;
+  if (depth > MAX_ARG_DEPTH) {
+    throw new ArgValidationError(`argument nesting exceeds ${MAX_ARG_DEPTH} levels`);
+  }
+  if (typeof args === "string") {
+    const cap = LONG_STRING_KEYS.has(parentKey) ? MAX_LONG_ARG_STRING : MAX_ARG_STRING;
+    if (args.length > cap) {
+      throw new ArgValidationError(
+        `argument${parentKey ? ` "${parentKey}"` : ""} length ${args.length} exceeds cap ${cap}`
+      );
+    }
+    return args;
+  }
+  if (typeof args === "number" || typeof args === "boolean") return args;
+  if (Array.isArray(args)) {
+    if (args.length > 256) {
+      throw new ArgValidationError(`array length ${args.length} exceeds cap 256`);
+    }
+    return args.map(v => validateArgs(v, depth + 1, parentKey));
+  }
+  if (typeof args === "object") {
+    const keys = Object.keys(args);
+    if (keys.length > 64) {
+      throw new ArgValidationError(`object key count ${keys.length} exceeds cap 64`);
+    }
+    const out = {};
+    for (const k of keys) {
+      if (typeof k !== "string" || k.length > 128) continue;
+      out[k] = validateArgs(args[k], depth + 1, k);
+    }
+    return out;
+  }
+  return null;
+}
+
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
   try {
-    const result = handleToolCall(name, args || {});
+    let safeArgs;
+    try {
+      safeArgs = validateArgs(args || {});
+    } catch (validationErr) {
+      return {
+        content: [{ type: "text", text: JSON.stringify({ status: "error", error: validationErr.code || "validation_error", summary: validationErr.message }) }],
+        isError: true,
+      };
+    }
+    const result = handleToolCall(name, safeArgs);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };

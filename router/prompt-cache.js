@@ -109,8 +109,14 @@ function normalizeRequest(req) {
   return sortedStringify(canonical);
 }
 
-function hashRequest(req) {
-  return crypto.createHash("sha256").update(normalizeRequest(req)).digest("hex");
+function hashRequest(req, authHeader) {
+  // SECURITY: include a hash of the auth header so two callers with different
+  // API keys cannot share a cache entry (which would leak responses across
+  // accounts).
+  const authHash = authHeader
+    ? crypto.createHash("sha256").update(String(authHeader)).digest("hex").slice(0, 16)
+    : "noauth";
+  return crypto.createHash("sha256").update(authHash + "\0" + normalizeRequest(req)).digest("hex");
 }
 
 function lastUserMessage(req) {
@@ -185,7 +191,7 @@ async function get(req, opts = {}) {
   if (req && req.stream) return null;
 
   const db = getDb();
-  const hash = hashRequest(req);
+  const hash = hashRequest(req, opts && opts.authHeader);
 
   // 1. Exact match
   const row = db.prepare("SELECT * FROM cache WHERE hash = ?").get(hash);
@@ -254,7 +260,7 @@ async function set(args) {
   if (args.request && args.request.stream) return false; // streaming not cached
 
   const db = getDb();
-  const hash = hashRequest(args.request);
+  const hash = hashRequest(args.request, args.authHeader);
 
   let embBlob = null;
   if (_embedFn) {

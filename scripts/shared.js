@@ -60,6 +60,25 @@ function resolveProjectRoot(exitOnMissing = true) {
 
 function readJsonl(filePath) {
   if (!fs.existsSync(filePath)) return [];
+  // SECURITY: cap file size before slurping into memory. Without this, an
+  // attacker who can write to the .ai-memory directory (or a runaway
+  // auto-capture loop) can OOM the daemon by appending to the JSONL.
+  const MAX_BYTES = 50 * 1024 * 1024; // 50 MB
+  try {
+    const st = fs.statSync(filePath);
+    if (st.size > MAX_BYTES) {
+      const msg = `[project-memory] WARNING: ${path.basename(filePath)} (${st.size} bytes) exceeds size cap ${MAX_BYTES} — skipping. Move/archive the file or raise the cap to read it.`;
+      // Stderr so CLIs/MCP server callers see it; debug log so daemon ops can audit.
+      try { process.stderr.write(msg + "\n"); } catch {}
+      try {
+        const logDir = path.dirname(filePath);
+        fs.appendFileSync(path.join(logDir, ".hook-debug.log"),
+          `[${new Date().toISOString()}] SIZE-CAP: skipping ${path.basename(filePath)} (${st.size} > ${MAX_BYTES})\n`,
+          "utf-8");
+      } catch {}
+      return [];
+    }
+  } catch { return []; }
   const content = fs.readFileSync(filePath, "utf-8").trim();
   if (!content) return [];
   const entries = [];

@@ -226,6 +226,13 @@ function rollupToday() {
 /**
  * Prometheus exposition format.
  */
+// Per Prom exposition spec, label values must escape \, ", and newline.
+// Without this, an attacker-controlled provider/model string could inject
+// extra labels or a fake metric line into the exporter output.
+function escLabel(s) {
+  return String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
+}
+
 function getPrometheusMetrics() {
   const db = getDb();
   const sinceMs = 24 * 3600 * 1000;
@@ -259,7 +266,7 @@ function getPrometheusMetrics() {
   lines.push("# HELP airouter_requests_total Total proxied requests by provider/model/status");
   lines.push("# TYPE airouter_requests_total counter");
   for (const c of counters) {
-    const lbls = `provider="${c.provider || "unknown"}",model="${(c.model || "unknown").replace(/"/g, "")}"`;
+    const lbls = `provider="${escLabel(c.provider || "unknown")}",model="${escLabel(c.model || "unknown")}"`;
     lines.push(`airouter_requests_total{${lbls},status="ok"} ${c.ok || 0}`);
     lines.push(`airouter_requests_total{${lbls},status="error"} ${c.err || 0}`);
   }

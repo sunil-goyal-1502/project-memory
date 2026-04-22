@@ -273,7 +273,10 @@ async function dispatch(commonRequest, format, kind, ctx) {
         tools: commonRequest.tools,
         params: commonRequest.params,
       };
-      const hit = await hooks.cacheGet(cacheReq);
+      const authHeader =
+        (ctx.req && ctx.req.headers &&
+         (ctx.req.headers.authorization || ctx.req.headers["x-api-key"])) || "";
+      const hit = await hooks.cacheGet(cacheReq, { authHeader });
       if (hit) {
         // Write cached response in caller's format. Cached payload is already
         // in `format` (we cache after fromCommon).
@@ -464,6 +467,9 @@ async function dispatch(commonRequest, format, kind, ctx) {
           tools: commonRequest.tools,
           params: commonRequest.params,
         },
+        authHeader:
+          (ctx.req && ctx.req.headers &&
+           (ctx.req.headers.authorization || ctx.req.headers["x-api-key"])) || "",
         response: finalResponse,
         format,
         prompt_tokens: finalUsage.input_tokens || 0,

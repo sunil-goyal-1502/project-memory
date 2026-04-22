@@ -25,7 +25,15 @@ function readPluginMeta() {
     process.exit(1);
   }
 }
+// SECURITY: validate plugin metadata names before joining into a path, to
+// rule out a malicious .claude-plugin/marketplace.json that uses ".." or an
+// absolute path to write the cache outside the user's plugin directory.
+const SAFE_NAME = /^[A-Za-z0-9._-]{1,128}$/;
 const { marketplaceName, pluginName } = readPluginMeta();
+if (!SAFE_NAME.test(marketplaceName) || !SAFE_NAME.test(pluginName)) {
+  console.error("Invalid marketplace/plugin name in .claude-plugin metadata");
+  process.exit(1);
+}
 const homeDir = process.env.USERPROFILE || process.env.HOME;
 if (!homeDir) {
   console.error("Cannot determine home directory (USERPROFILE/HOME not set)");

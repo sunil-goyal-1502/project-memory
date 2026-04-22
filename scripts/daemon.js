@@ -34,7 +34,20 @@ const { M, B, R, G, Y, C, D } = ANSI;
 const home = process.env.USERPROFILE || process.env.HOME || "";
 const portFile = path.join(home, ".ai-memory-daemon-port");
 const pidFile = path.join(home, ".ai-memory-daemon-pid");
+const tokenFile = path.join(home, ".ai-memory-daemon-token");
 const pluginRoot = path.resolve(__dirname, "..").replace(/\\/g, "/");
+
+// SECURITY: per-instance shared secret. Hooks read this file (mode 0600 where
+// the OS supports it) and include the token in every IPC request. This blocks
+// other local processes from impersonating the Claude Code hook and driving
+// the daemon to read/write arbitrary paths under $HOME.
+const crypto = require("crypto");
+const DAEMON_TOKEN = crypto.randomBytes(32).toString("hex");
+
+// SECURITY: cap per-IPC request size. Hook payloads are small JSON objects;
+// 1 MB is well above any legitimate need and prevents memory pinning by a
+// connection that never closes.
+const MAX_IPC_BYTES = 1 * 1024 * 1024;
 
 // ── Stop command ──
 if (process.argv[2] === "--stop") {
@@ -229,6 +242,24 @@ function setupSourceWatcher(projectRoot) {
   }
 
   try {
+    // SECURITY: refuse to watch overly broad roots. A recursive fs.watch on
+    // $HOME or a filesystem root explodes file-descriptor / memory usage and
+    // can block the event loop while the OS enumerates the tree.
+    const homeNorm = (process.env.USERPROFILE || process.env.HOME || "").replace(/\\/g, "/").replace(/\/$/, "");
+    if (!normalized || normalized === homeNorm || normalized === "/" || /^[A-Za-z]:\/?$/.test(normalized)) {
+      logForProject(normalized, `SOURCE-WATCHER-REFUSED: refusing to watch root/home`);
+      return;
+    }
+    try {
+      // Refuse projects with extreme top-level fan-out (likely an accidentally
+      // very wide directory, not a real project).
+      const topLevel = fs.readdirSync(normalized);
+      if (topLevel.length > 5000) {
+        logForProject(normalized, `SOURCE-WATCHER-REFUSED: top-level fan-out ${topLevel.length} > 5000`);
+        return;
+      }
+    } catch { return; }
+
     const watcher = fs.watch(normalized, { recursive: true }, (eventType, filename) => {
       if (!filename) return;
 
@@ -453,6 +484,15 @@ function handlePostToolUse(projectRoot, input) {
       const toolInput = input.tool_input || {};
       const filePath = toolInput.file_path;
       if (filePath) {
+        // SECURITY: refuse to read files outside the project root. Without
+        // this check a malicious local IPC client could pass any file path
+        // (e.g. ~/.aws/credentials) and have the daemon read & parse it.
+        const resolvedFile = path.resolve(filePath);
+        const resolvedRoot = path.resolve(root);
+        if (!resolvedFile.startsWith(resolvedRoot + path.sep) && resolvedFile !== resolvedRoot) {
+          logForProject(root, `CODE-GRAPH-REFUSED: file outside project root: ${filePath}`);
+          return {};
+        }
         const codeParserMod = require(path.join(__dirname, "code-parser.js"));
         const codeGraphMod = require(path.join(__dirname, "code-graph.js"));
         const ext = path.extname(filePath).toLowerCase();
@@ -630,12 +670,62 @@ function startServer() {
   const server = net.createServer((socket) => {
     lastActivity = Date.now();
     let data = "";
-    socket.on("data", (chunk) => { data += chunk.toString(); });
+    let aborted = false;
+
+    // SECURITY: hook IPC is sub-second by design. A 5s ceiling guarantees a
+    // never-closing connection cannot pin memory or a socket forever.
+    socket.setTimeout(5000, () => { aborted = true; try { socket.destroy(); } catch {} });
+
+    socket.on("data", (chunk) => {
+      if (aborted) return;
+      data += chunk.toString();
+      if (data.length > MAX_IPC_BYTES) {
+        aborted = true;
+        try { socket.end(JSON.stringify({ error: "request too large" }) + "\n"); } catch {}
+        try { socket.destroy(); } catch {}
+      }
+    });
     socket.on("end", () => {
+      if (aborted) return;
       try {
         const lineEnd = data.indexOf("\n");
         const json = lineEnd >= 0 ? data.slice(0, lineEnd) : data;
         const request = JSON.parse(json);
+
+        // ── AuthN: shared-secret token (constant-time compare) ──
+        // Skip auth ONLY for ping (used by liveness probes that may not have
+        // the token yet, e.g. during startup races). All read/write handlers
+        // require the token.
+        if (request.type !== "ping") {
+          const got = String(request && request.token || "");
+          const want = DAEMON_TOKEN;
+          let ok = got.length === want.length;
+          if (ok) {
+            try { ok = crypto.timingSafeEqual(Buffer.from(got), Buffer.from(want)); }
+            catch { ok = false; }
+          }
+          if (!ok) {
+            socket.end(JSON.stringify({ error: "unauthorized" }) + "\n");
+            return;
+          }
+        }
+
+        // ── AuthZ: projectRoot must exist and contain .ai-memory ──
+        // Without this an authenticated-but-malicious caller could still
+        // point fs.watch at an arbitrary path. Hooks are the only legitimate
+        // caller and they always supply a real project they've already
+        // discovered via findMemDir().
+        if (request.projectRoot) {
+          const pr = String(request.projectRoot);
+          const norm = path.resolve(pr);
+          if (norm.split(path.sep).includes("..") ||
+              !fs.existsSync(path.join(norm, ".ai-memory"))) {
+            socket.end(JSON.stringify({ error: "invalid projectRoot" }) + "\n");
+            return;
+          }
+          request.projectRoot = norm;
+        }
+
         let response = {};
 
         const t = Date.now();
@@ -666,6 +756,10 @@ function startServer() {
     const port = server.address().port;
     fs.writeFileSync(portFile, String(port), "utf-8");
     fs.writeFileSync(pidFile, String(process.pid), "utf-8");
+    // SECURITY: write token with 0600 where the OS honours it. On Windows
+    // the file lives under USERPROFILE (per-user ACLs) which is acceptable.
+    fs.writeFileSync(tokenFile, DAEMON_TOKEN, { encoding: "utf-8", mode: 0o600 });
+    try { fs.chmodSync(tokenFile, 0o600); } catch {}
     console.log(`Memory daemon started on 127.0.0.1:${port} (PID ${process.pid})`);
   });
 
@@ -681,6 +775,7 @@ function startServer() {
   function cleanup() {
     try { fs.unlinkSync(portFile); } catch {}
     try { fs.unlinkSync(pidFile); } catch {}
+    try { fs.unlinkSync(tokenFile); } catch {}
     // Unwatch all project files and source watchers
     for (const [, pData] of projects) {
       try {

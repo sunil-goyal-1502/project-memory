@@ -37,8 +37,20 @@ MCP_SERVER_KEY = "project-memory"
 
 # REPO_URL is used only when the user runs install.py without first cloning.
 # Priority: env var > git remote of this checkout > None (will prompt).
+# SECURITY: validate against a safe-character allow-list before using in any
+# subprocess call, so a hostile env var can't smuggle shell metacharacters
+# into git's argument vector even if a future call accidentally re-enables
+# shell=True.
+_REPO_URL_RE = re.compile(r"^(https?://|git@|ssh://|git://)[A-Za-z0-9._@:/~+\-]{1,512}$")
+
+def _safe_repo_url(value):
+    if not value:
+        return None
+    value = value.strip()
+    return value if _REPO_URL_RE.match(value) else None
+
 def _detect_repo_url():
-    env = os.environ.get("PROJECT_MEMORY_REPO_URL")
+    env = _safe_repo_url(os.environ.get("PROJECT_MEMORY_REPO_URL"))
     if env:
         return env
     try:
@@ -48,7 +60,7 @@ def _detect_repo_url():
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
+            return _safe_repo_url(result.stdout.strip())
     except Exception:
         pass
     return None
@@ -89,10 +101,24 @@ def to_forward_slashes(p):
 
 
 def run_cmd(args, capture=True, check=False, **kwargs):
-    """Run a subprocess command. On Windows, use shell=True for commands
-    that need PATH resolution (like node, npm, git)."""
-    if IS_WINDOWS and isinstance(args, list):
-        # On Windows, shell=True is needed for PATH resolution of .cmd/.exe
+    """Run a subprocess command safely without shell=True for list args.
+
+    SECURITY: never pass shell=True with a list — that re-joins the list
+    into a string and re-parses through cmd.exe, which is shell-injection
+    prone if any element later contains user input. Instead, on Windows we
+    resolve the executable through shutil.which() so PATH lookup of .cmd /
+    .exe still works without invoking a shell.
+    """
+    if isinstance(args, list) and args:
+        # Force shell=False for list args; resolve the binary explicitly.
+        kwargs["shell"] = False
+        if IS_WINDOWS:
+            resolved = shutil.which(args[0])
+            if resolved:
+                args = [resolved] + args[1:]
+    elif isinstance(args, str):
+        # String commands may legitimately need a shell (kept for the few
+        # places that pass a literal pipeline). Caller controls these.
         kwargs.setdefault("shell", True)
     try:
         result = subprocess.run(
@@ -213,22 +239,18 @@ def install_node():
             print_warn("Homebrew not found.")
 
     elif system == "Linux":
-        # Try apt-based install
-        if shutil.which("apt-get"):
-            print("  Running: NodeSource LTS setup + apt-get install nodejs")
-            print_warn("This may require sudo access.")
-            setup = run_cmd(
-                "curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -",
-                capture=False,
-                shell=True,
-            )
-            if setup and setup.returncode == 0:
-                result = run_cmd(
-                    ["sudo", "apt-get", "install", "-y", "nodejs"], capture=False
-                )
-                if result and result.returncode == 0:
-                    print_ok("Node.js installed via apt")
-                    return True
+        # SECURITY: We previously piped a remote shell script straight into
+        # `sudo bash`, which is a textbook supply-chain risk (whoever
+        # controls deb.nodesource.com owns root on the user's machine in the
+        # window between download and execution). Refuse to do that and
+        # instead point the user at their distribution's official path.
+        print_warn("Auto-install of Node.js on Linux is disabled for safety.")
+        print_warn("Please install Node.js manually using your package manager:")
+        print("  Debian / Ubuntu: sudo apt-get install nodejs npm")
+        print("  Fedora / RHEL  : sudo dnf install nodejs npm")
+        print("  Arch           : sudo pacman -S nodejs npm")
+        print("  Other          : https://nodejs.org/en/download/")
+        return False
 
     print_err("Could not auto-install Node.js.")
     print_err("Please install manually: https://nodejs.org/en/download/")

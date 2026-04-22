@@ -25,13 +25,16 @@ function main() {
 
   // Global daemon port file (single daemon serves all projects)
   const portFile = path.join(home, ".ai-memory-daemon-port");
+  const tokenFile = path.join(home, ".ai-memory-daemon-token");
   let port = 0;
+  let token = "";
   try { port = Number(fs.readFileSync(portFile, "utf-8").trim()); } catch {}
+  try { token = fs.readFileSync(tokenFile, "utf-8").trim(); } catch {}
 
-  if (port > 0) {
+  if (port > 0 && token) {
     // Fast path: TCP to global daemon with projectRoot
     const client = net.createConnection({ host: "127.0.0.1", port, timeout: 800 }, () => {
-      client.end(JSON.stringify({ type: "post-tool-use", projectRoot, input }) + "\n");
+      client.end(JSON.stringify({ type: "post-tool-use", token, projectRoot, input }) + "\n");
     });
 
     let data = "";

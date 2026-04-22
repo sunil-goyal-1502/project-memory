@@ -57,10 +57,28 @@ function filterHeaders(headers) {
 }
 
 function readBody(req) {
+  // SECURITY: cap to prevent OOM. The largest legitimate payload is a model
+  // request with a very long context; 50 MB is far above any current model
+  // window. Larger requests get a 413 from the caller.
+  const MAX_BODY = 50 * 1024 * 1024;
   return new Promise((resolve, reject) => {
     const chunks = [];
-    req.on('data', (c) => chunks.push(c));
-    req.on('end', () => resolve(Buffer.concat(chunks)));
+    let received = 0;
+    let aborted = false;
+    req.on('data', (c) => {
+      if (aborted) return;
+      received += c.length;
+      if (received > MAX_BODY) {
+        aborted = true;
+        const err = new Error('payload too large');
+        err.code = 'EPAYLOADTOOLARGE';
+        try { req.destroy(); } catch {}
+        reject(err);
+        return;
+      }
+      chunks.push(c);
+    });
+    req.on('end', () => { if (!aborted) resolve(Buffer.concat(chunks)); });
     req.on('error', reject);
   });
 }
@@ -101,6 +119,15 @@ async function forward({ req, res, provider, body, onResponse }) {
   }
 
   const upstreamBase = PROVIDER_URLS[detected];
+  // SECURITY: req.url must be origin-form (starts with "/"). An absolute-form
+  // request line ("http://evil/path") would let a caller redirect the proxy
+  // to an arbitrary upstream by string-concatenation.
+  if (typeof req.url !== 'string' || req.url.length === 0 || req.url[0] !== '/') {
+    res.statusCode = 400;
+    res.setHeader('content-type', 'application/json');
+    res.end(JSON.stringify({ error: { type: 'bad_request', message: 'expected origin-form request URI' } }));
+    return;
+  }
   const targetUrl = upstreamBase + req.url;
 
   let payload = body;

@@ -25,13 +25,16 @@ function main() {
 
   // Global daemon port file (single daemon serves all projects)
   const portFile = path.join(home, ".ai-memory-daemon-port");
+  const tokenFile = path.join(home, ".ai-memory-daemon-token");
   let port = 0;
+  let token = "";
   try { port = Number(fs.readFileSync(portFile, "utf-8").trim()); } catch {}
+  try { token = fs.readFileSync(tokenFile, "utf-8").trim(); } catch {}
 
-  if (port > 0) {
+  if (port > 0 && token) {
     // Fast path: TCP to global daemon with projectRoot
     const client = net.createConnection({ host: "127.0.0.1", port, timeout: 800 }, () => {
-      client.end(JSON.stringify({ type: "pre-tool-use", projectRoot, input }) + "\n");
+      client.end(JSON.stringify({ type: "pre-tool-use", token, projectRoot, input }) + "\n");
     });
 
     let data = "";
@@ -96,7 +99,8 @@ function findMemDir(cwd, sessionId) {
     dir = parent;
   }
   // Session registry fallback
-  if (sessionId) {
+  const SAFE_SID = /^[A-Za-z0-9_-]{1,128}$/;
+  if (sessionId && SAFE_SID.test(String(sessionId))) {
     try {
       const sessFile = path.join(home, ".ai-memory-sessions", sessionId);
       const savedRoot = fs.readFileSync(sessFile, "utf-8").trim();
