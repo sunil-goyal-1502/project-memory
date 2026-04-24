@@ -150,16 +150,18 @@ function getDashboard(opts = {}) {
   const byEndpoint = {};
   const latencies = [];
 
+  const LOCAL_PROVIDERS = new Set(["ollama", "openai-local"]);
   for (const row of all) {
-    if (row.provider === "ollama") local++;
-    else if (row.provider) cloud++;
+    const isLocal = LOCAL_PROVIDERS.has(row.provider);
+    if (isLocal) local++;
+    else if (row.provider && row.provider !== "cache") cloud++;
     if (row.fallback) fallback++;
     if (row.cache_hit) {
       cacheHits++;
       // Cache hit = full token cost saved
       savedPrompt += row.prompt_tokens || 0;
       savedCompletion += row.completion_tokens || 0;
-    } else if (row.provider === "ollama") {
+    } else if (isLocal) {
       // Local serve = cost we would have paid to cloud
       savedPrompt += row.prompt_tokens || 0;
       savedCompletion += row.completion_tokens || 0;
@@ -170,8 +172,8 @@ function getDashboard(opts = {}) {
     const ep = row.endpoint || "(unknown)";
     if (!byEndpoint[ep]) byEndpoint[ep] = { count: 0, local: 0, cloud: 0, cache: 0 };
     byEndpoint[ep].count++;
-    if (row.provider === "ollama") byEndpoint[ep].local++;
-    else if (row.provider) byEndpoint[ep].cloud++;
+    if (isLocal) byEndpoint[ep].local++;
+    else if (row.provider && row.provider !== "cache") byEndpoint[ep].cloud++;
     if (row.cache_hit) byEndpoint[ep].cache++;
   }
 

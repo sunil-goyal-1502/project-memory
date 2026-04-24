@@ -37,6 +37,10 @@ const M = require("./_mocks.js");
   process.env.ROUTER_MODE = "aggressive";
   process.env.ROUTER_BREAKER_THRESHOLD = "100"; // don't trip during test
   process.env.ROUTER_BREAKER_COOLDOWN_MS = "100";
+  // This test exercises tier/complexity routing aggregated across many
+  // requests; disable the client-model hint so claude-* names don't force
+  // every request to the Anthropic upstream.
+  process.env.ROUTER_RESPECT_CLIENT_MODEL = "false";
 
   M.clearRouterCache();
 

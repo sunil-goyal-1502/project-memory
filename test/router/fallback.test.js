@@ -23,6 +23,9 @@ const SBX = sandboxDir("fallback");
 process.env.ROUTER_DB_DIR = SBX;
 process.env.ROUTER_BREAKER_COOLDOWN_MS = "100";
 process.env.ROUTER_BREAKER_THRESHOLD = "5";
+// This file exercises tier/complexity routing + cache + breaker fallback —
+// not the client-model hint. Keep it deterministic by disabling the hint.
+process.env.ROUTER_RESPECT_CLIENT_MODEL = "false";
 
 const A = makeAssert();
 

@@ -27,6 +27,14 @@
  */
 
 const { getConfig } = require("./config.js");
+const modelRegistry = require("./model-registry.js");
+
+// Providers that run inside the user's trust boundary. Privacy mode only
+// blocks the cloud ones (anthropic, openai). `openai-local` means a vLLM /
+// LM Studio / llama.cpp / etc. OpenAI-compatible server on the user's own
+// host or LAN — treated the same as Ollama for privacy purposes.
+const LOCAL_PROVIDERS = new Set(["ollama", "openai-local"]);
+function isLocalProvider(p) { return LOCAL_PROVIDERS.has(p); }
 
 // Cloud format → cloud provider (for both primary cloud picks AND fallback picks).
 function cloudProviderForFormat(format) {
@@ -43,6 +51,12 @@ function pickModel(provider, tier, kind, classification, commonRequest) {
     if (tier === "code")      return cfg.tier_code   || cfg.ollama_model;
     if (tier === "complex")   return cfg.tier_complex || cfg.ollama_model;
     return cfg.tier_simple || cfg.ollama_model;
+  }
+  if (provider === "openai-local") {
+    // Local OpenAI-compatible server (vLLM / LM Studio / llama.cpp). The
+    // user's config declares which model the server is serving; there are
+    // no tiers here.
+    return cfg.local_openai_model || cfg.tier_simple || null;
   }
   // Cloud: respect whatever model the caller asked for. The router does not
   // re-write cloud model selection — that's the client's contract with the
@@ -87,6 +101,35 @@ function decide(commonRequest, classification, kind, format) {
   const mode = cfg.router_mode || "balanced";
   const privacy = !!cfg.router_privacy_mode;
   const complexity = (classification && classification.complexity) || "complex";
+
+  // ── Client-model-driven routing ────────────────────────────────────────
+  // If the caller specified a model (e.g. `claude --model qwen3.6:latest` or
+  // /model gpt-4o), honor that choice before any tier/classification logic.
+  // `respect_client_model` defaults to true; set it to false to restore the
+  // pre-existing "always route by tier" behavior.
+  const respect = cfg.router_respect_client_model !== false;
+  const clientModel = commonRequest && commonRequest.params && commonRequest.params.model;
+  if (respect && kind !== "embedding" && clientModel && mode !== "disabled") {
+    const detected = modelRegistry.detectProviderFromModel(clientModel);
+    if (detected) {
+      if (!isLocalProvider(detected.provider) && privacy) {
+        throwPrivacy(`client-specified ${detected.provider} model '${detected.cleanModel}' blocked by privacy mode`);
+      }
+      // Local pick gets a cloud fallback if one is configured and privacy is off.
+      const fallback = (isLocalProvider(detected.provider) && !privacy)
+        ? { provider: cloud, model: pickModel(cloud, complexity, kind, classification, commonRequest) }
+        : null;
+      return {
+        provider: detected.provider,
+        model: detected.cleanModel,
+        reason: `client model '${clientModel}' → ${detected.provider} (${detected.reason})`,
+        fallback,
+      };
+    }
+    // Unknown model name → fall through to tier logic. The existing code
+    // path preserves the model on the wire for cloud dispatch anyway, so
+    // no behavior change.
+  }
 
   // Disabled mode → straight to cloud, no fallback.
   if (mode === "disabled") {
@@ -183,4 +226,6 @@ module.exports = {
   // exposed for tests
   cloudProviderForFormat,
   looksCodeHeavy,
+  isLocalProvider,
+  LOCAL_PROVIDERS,
 };

@@ -78,6 +78,95 @@ function buildOllamaOptions(commonRequest) {
   return Object.keys(opts).length ? opts : undefined;
 }
 
+// ─── OpenAI-format helpers (used by openai-local + openai cloud cross-format) ─
+
+// Build an OpenAI /v1/chat/completions body from a commonRequest. commonRequest
+// carries Anthropic-specific stashes (`system`, `_tool_results`) that we need
+// to flatten into the role+content shape OpenAI expects.
+function buildOpenAIBody(commonRequest, model, stream) {
+  const messages = [];
+  if (commonRequest.system) {
+    messages.push({ role: "system", content: String(commonRequest.system) });
+  }
+  for (const m of commonRequest.messages || []) {
+    const out = { role: m.role };
+    if (typeof m.content === "string") out.content = m.content;
+    else if (Array.isArray(m.content)) {
+      // Collapse array-of-parts to plain text where possible. This is
+      // lossy for images/tool results but both OpenAI and Anthropic
+      // accept plain strings for text-only requests.
+      out.content = m.content
+        .map((part) => (part && typeof part.text === "string" ? part.text : ""))
+        .join("");
+    } else {
+      out.content = "";
+    }
+    if (m.tool_calls) out.tool_calls = m.tool_calls;
+    if (m.tool_call_id) out.tool_call_id = m.tool_call_id;
+    messages.push(out);
+    if (Array.isArray(m._tool_results)) {
+      for (const tr of m._tool_results) messages.push(tr);
+    }
+  }
+  const body = { model, messages, stream: !!stream };
+  const p = commonRequest.params || {};
+  if (Number.isFinite(p.temperature)) body.temperature = p.temperature;
+  if (Number.isFinite(p.top_p)) body.top_p = p.top_p;
+  if (Number.isFinite(p.max_tokens)) body.max_tokens = p.max_tokens;
+  if (p.stop) body.stop = p.stop;
+  if (commonRequest.tools && commonRequest.tools.length) {
+    body.tools = commonRequest.tools.map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description || "",
+        parameters: t.parameters || {},
+      },
+    }));
+  }
+  return body;
+}
+
+// Resolve the target URL + auth headers for an OpenAI-format request based on
+// the provider. `openai-local` has no auth; `openai` (cloud) requires an
+// OPENAI_API_KEY in the environment.
+function resolveOpenAITarget(provider) {
+  const cfg = getConfig();
+  if (provider === "openai-local") {
+    const base = cfg.local_openai_url;
+    if (!base) {
+      const err = new Error("openai-local provider selected but local_openai_url is not configured");
+      err.code = "LOCAL_OPENAI_NOT_CONFIGURED";
+      throw err;
+    }
+    return {
+      url: base.replace(/\/+$/, "") + "/v1/chat/completions",
+      headers: { "content-type": "application/json" },
+      isLocal: true,
+    };
+  }
+  if (provider === "openai") {
+    const base = cfg.openai_upstream_url || "https://api.openai.com";
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) {
+      const err = new Error("OpenAI cloud routing requires OPENAI_API_KEY in the environment");
+      err.code = "OPENAI_KEY_MISSING";
+      throw err;
+    }
+    return {
+      url: base.replace(/\/+$/, "") + "/v1/chat/completions",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${key}`,
+      },
+      isLocal: false,
+    };
+  }
+  const err = new Error(`resolveOpenAITarget: unsupported provider ${provider}`);
+  err.code = "UNSUPPORTED_PROVIDER";
+  throw err;
+}
+
 function writeJSON(res, status, obj) {
   if (res.headersSent) return;
   res.statusCode = status;
@@ -221,6 +310,154 @@ async function dispatchLocalStream(commonRequest, primary, format, ctx, beforeFi
       }
     })();
   });
+
+  try { out.end(); } catch {}
+  return { streamed: true, usage, firstChunkSeen };
+}
+
+// ─── OpenAI-format dispatch (openai-local + cross-format openai cloud) ──────
+
+async function dispatchOpenAIFormatNonStream(commonRequest, primary, format) {
+  const { url, headers } = resolveOpenAITarget(primary.provider);
+  const body = buildOpenAIBody(commonRequest, primary.model, false);
+  const res = await fetch(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    const err = new Error(`${primary.provider} HTTP ${res.status}: ${txt.slice(0, 200)}`);
+    err.status = res.status;
+    throw err;
+  }
+  const openaiResp = await res.json();
+  return openaiResponseToCommon(openaiResp);
+}
+
+// Translate a non-stream OpenAI /v1/chat/completions response back into the
+// common shape so adapter.fromCommon can emit it in the caller's format.
+function openaiResponseToCommon(body) {
+  const choice = (body && body.choices && body.choices[0]) || {};
+  const msg = choice.message || {};
+  const content = typeof msg.content === "string" ? msg.content : "";
+  const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+  const finish = choice.finish_reason || "stop";
+  const stopMap = { stop: "end_turn", length: "max_tokens", tool_calls: "tool_use", content_filter: "end_turn" };
+  return {
+    id: body.id || null,
+    model: body.model,
+    content,
+    thinking: typeof msg.reasoning_content === "string" ? msg.reasoning_content : "",
+    tool_calls: toolCalls,
+    stop_reason: stopMap[finish] || "end_turn",
+    usage: {
+      input_tokens: (body.usage && body.usage.prompt_tokens) || 0,
+      output_tokens: (body.usage && body.usage.completion_tokens) || 0,
+    },
+  };
+}
+
+async function dispatchOpenAIFormatStream(commonRequest, primary, format, ctx, beforeFirstChunk) {
+  const { url, headers } = resolveOpenAITarget(primary.provider);
+  const body = buildOpenAIBody(commonRequest, primary.model, true);
+
+  let res;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    err.preFirstChunk = true;
+    throw err;
+  }
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    const err = new Error(`${primary.provider} stream HTTP ${res.status}: ${txt.slice(0, 200)}`);
+    err.preFirstChunk = true;
+    err.status = res.status;
+    throw err;
+  }
+
+  // OpenAI emits SSE; translate to caller's format if different.
+  const translator = (format === "openai")
+    ? null
+    : adapter.translateStream("openai", format, { model: primary.model });
+  const out = ctx.res;
+
+  if (!out.headersSent) {
+    out.statusCode = 200;
+    out.setHeader("content-type", "text/event-stream");
+    out.setHeader("cache-control", "no-cache");
+    out.setHeader("connection", "keep-alive");
+  }
+
+  let firstChunkSeen = false;
+  let usage = { input_tokens: 0, output_tokens: 0 };
+  // Sniff upstream SSE for usage — OpenAI reports it on the final chunk
+  // when include_usage is enabled, and some servers always do. Harvest on
+  // best-effort so stats stay meaningful.
+  let sseBuf = "";
+  function sniff(chunkBuf) {
+    sseBuf += chunkBuf.toString("utf8");
+    let nl;
+    while ((nl = sseBuf.indexOf("\n")) >= 0) {
+      const line = sseBuf.slice(0, nl);
+      sseBuf = sseBuf.slice(nl + 1);
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const payload = trimmed.slice(5).trim();
+      if (!payload || payload === "[DONE]") continue;
+      try {
+        const o = JSON.parse(payload);
+        if (o && o.usage) {
+          if (Number.isFinite(o.usage.prompt_tokens)) usage.input_tokens = o.usage.prompt_tokens;
+          if (Number.isFinite(o.usage.completion_tokens)) usage.output_tokens = o.usage.completion_tokens;
+        }
+      } catch { /* best-effort */ }
+    }
+  }
+
+  const writeOut = (chunk) => {
+    if (!firstChunkSeen) {
+      firstChunkSeen = true;
+      if (typeof beforeFirstChunk === "function") beforeFirstChunk();
+    }
+    if (!out.write(chunk)) out.once("drain", () => {});
+  };
+
+  if (translator) {
+    translator.on("data", writeOut);
+    await new Promise((resolve, reject) => {
+      translator.on("end", resolve);
+      translator.on("error", reject);
+      (async () => {
+        try {
+          for await (const chunk of webStreamToBuffers(res.body)) {
+            sniff(chunk);
+            translator.write(chunk);
+          }
+          translator.end();
+        } catch (err) {
+          if (!firstChunkSeen) err.preFirstChunk = true;
+          translator.destroy(err);
+        }
+      })();
+    });
+  } else {
+    // format==='openai' → pipe SSE byte-for-byte.
+    try {
+      for await (const chunk of webStreamToBuffers(res.body)) {
+        sniff(chunk);
+        writeOut(chunk);
+      }
+    } catch (err) {
+      if (!firstChunkSeen) err.preFirstChunk = true;
+      throw err;
+    }
+  }
 
   try { out.end(); } catch {}
   return { streamed: true, usage, firstChunkSeen };
@@ -374,8 +611,23 @@ async function dispatch(commonRequest, format, kind, ctx) {
         const common = await dispatchLocalNonStream(commonRequest, choice, format);
         breaker.recordSuccess("ollama");
         return { ok: true, common, usage: common.usage || {} };
+      } else if (choice.provider === "openai-local" || (choice.provider === "openai" && format !== "openai")) {
+        // openai-local: always cross-format (or same-format if client was already openai).
+        // openai cloud with a non-openai client format: we have to translate — the
+        // byte-for-byte cloud passthrough would send an Anthropic body to OpenAI.
+        if (!breaker.isAvailable(choice.provider)) {
+          return { ok: false, error: new Error(`breaker open for ${choice.provider}`), preFirstChunk: true };
+        }
+        if (isStream) {
+          const r = await dispatchOpenAIFormatStream(commonRequest, choice, format, ctx);
+          breaker.recordSuccess(choice.provider);
+          return { ok: true, streamed: true, usage: r.usage };
+        }
+        const common = await dispatchOpenAIFormatNonStream(commonRequest, choice, format);
+        breaker.recordSuccess(choice.provider);
+        return { ok: true, common, usage: common.usage || {} };
       } else {
-        // Cloud
+        // Cloud (same format as client) — byte-for-byte passthrough.
         if (!breaker.isAvailable(choice.provider)) {
           return { ok: false, error: new Error(`breaker open for ${choice.provider}`), preFirstChunk: true };
         }
@@ -393,7 +645,7 @@ async function dispatch(commonRequest, format, kind, ctx) {
   let result = await attempt(activeChoice);
 
   // Confidence check (non-streaming local only) — discard + fallback if low.
-  if (result.ok && !isStream && activeChoice.provider === "ollama" && result.common) {
+  if (result.ok && !isStream && router.isLocalProvider(activeChoice.provider) && result.common) {
     const conf = confidence.check(result.common, commonRequest);
     if (!conf.confident && primary.fallback && cfg.router_fallback_on_low_confidence !== false) {
       // Switch to fallback (cloud).
@@ -457,7 +709,7 @@ async function dispatch(commonRequest, format, kind, ctx) {
   }
 
   // ── 6. Cache (only confident, non-stream local) ──────────────────────────
-  if (finalResponse && !isStream && activeChoice.provider === "ollama" && !lastError) {
+  if (finalResponse && !isStream && router.isLocalProvider(activeChoice.provider) && !lastError) {
     try {
       await hooks.cacheSet({
         request: {

@@ -16,7 +16,10 @@ const configPath = require.resolve("../../router/config.js");
 const realConfig = require("../../router/config.js");
 
 let _override = {};
-function setConfig(o) { _override = o; }
+// These tests exercise tier/mode/classification logic. Client-model routing
+// is a separate feature with its own tests — disable it globally here so the
+// heuristic (claude-* → anthropic) doesn't short-circuit the tier picks.
+function setConfig(o) { _override = { router_respect_client_model: false, ...o }; }
 
 require.cache[configPath].exports = {
   ...realConfig,
@@ -53,7 +56,7 @@ const FORMATS = ["anthropic", "openai", "responses"];
 for (const mode of MODES) {
   for (const cx of COMPLEXITIES) {
     for (const fmt of FORMATS) {
-      setConfig({ router_mode: mode, router_privacy_mode: false });
+      setConfig({ router_mode: mode, router_privacy_mode: false, router_respect_client_model: false });
       const d = router.decide(chatReq(), classification(cx), "chat", fmt);
       const cloud = fmt === "anthropic" ? "anthropic" : "openai";
 

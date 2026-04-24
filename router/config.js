@@ -29,10 +29,18 @@ const DEFAULTS = Object.freeze({
   tier_embed: "nomic-embed-text",
   ollama_url: "http://127.0.0.1:11434",
   ollama_model: "llama3.2:3b",
+  // OpenAI-compatible local server (vLLM / LM Studio / llama.cpp / etc.).
+  // Kept null by default so nothing binds to it until the user opts in.
+  local_openai_url: null,
+  local_openai_model: null,
   router_mode: "balanced", // aggressive | balanced | conservative | disabled
   router_privacy_mode: false,
   router_fallback_on_low_confidence: true,
   router_route_embeddings: true,
+  // When true (default), the model name in the inbound request
+  // (claude --model X / /model X) drives provider selection. When false,
+  // the router uses tier logic regardless of the client's model choice.
+  router_respect_client_model: true,
   anthropic_upstream_url: "https://api.anthropic.com",
   openai_upstream_url: "https://api.openai.com",
   router_cache_ttl_hours: 24,
@@ -48,15 +56,42 @@ const ENV_KEYS = [
   "TIER_EMBED",
   "OLLAMA_URL",
   "OLLAMA_MODEL",
+  "LOCAL_OPENAI_URL",
+  "LOCAL_OPENAI_MODEL",
   "ROUTER_MODE",
   "ROUTER_PRIVACY_MODE",
   "ROUTER_FALLBACK_ON_LOW_CONFIDENCE",
   "ROUTER_ROUTE_EMBEDDINGS",
+  "ROUTER_RESPECT_CLIENT_MODEL",
   "ANTHROPIC_UPSTREAM_URL",
   "OPENAI_UPSTREAM_URL",
   "ROUTER_CACHE_TTL_HOURS",
   "ROUTER_CACHE_SEMANTIC_THRESHOLD",
 ];
+
+// Keys whose values MUST be well-formed http(s) URLs if set. Anything else
+// (file://, javascript:, relative path, empty string after trim) is rejected
+// and the key falls back to its default. Prevents a malformed config from
+// steering the router at an unintended destination.
+const URL_KEYS = new Set([
+  "ollama_url",
+  "local_openai_url",
+  "anthropic_upstream_url",
+  "openai_upstream_url",
+]);
+
+function isSafeHttpUrl(v) {
+  if (typeof v !== "string") return false;
+  const s = v.trim();
+  if (!s) return false;
+  let u;
+  try { u = new URL(s); } catch { return false; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+  // Reject URLs with credentials embedded — they can leak via logs and have
+  // no legitimate use for these destinations.
+  if (u.username || u.password) return false;
+  return true;
+}
 
 let _current = null;
 const _subscribers = new Set();
@@ -86,6 +121,16 @@ function coerce(key, value) {
   if (typeof def === "number") {
     const n = Number(value);
     return Number.isFinite(n) ? n : def;
+  }
+  // URL keys get strict validation — silently drop invalid values so the
+  // frozen default wins rather than a user-supplied garbage string.
+  if (URL_KEYS.has(key)) {
+    if (value === "" || value == null) return undefined;
+    if (!isSafeHttpUrl(value)) {
+      process.stderr.write(`[router/config] ignoring invalid URL for ${key}\n`);
+      return undefined;
+    }
+    return String(value).trim();
   }
   return value === "" ? undefined : value;
 }
@@ -160,6 +205,7 @@ module.exports = {
   subscribe,
   startWatching,
   stopWatching,
+  isSafeHttpUrl,
   // Test hook: re-read ROUTER_DB_DIR (call after mutating env)
   refreshRouterDir() {
     ROUTER_DIR = resolveRouterDir();
