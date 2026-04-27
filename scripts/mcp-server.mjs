@@ -173,6 +173,28 @@ const TOOLS = [
     description: "Show workflow candidates (detected multi-step command patterns), generated skills, and their occurrence counts.",
     inputSchema: { type: "object", properties: {}, required: [] },
   },
+  {
+    name: "run_maintenance",
+    description: "Run autonomous corpus maintenance: detect stale entries, find duplicates, prune orphaned graph edges, refresh missing embeddings. Returns summary of actions taken.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dry_run: { type: "boolean", description: "If true, report what would change without modifying files (default: false)" },
+      },
+      required: [],
+    },
+  },
+  {
+    name: "get_corpus_snapshot",
+    description: "Generate a complete structured markdown snapshot of the entire memory corpus, clustered by topic similarity. Optimized for LLM consumption within a token budget.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        max_chars: { type: "number", description: "Maximum characters in output (default: 50000, ~12K tokens)" },
+      },
+      required: [],
+    },
+  },
 ];
 
 // ── Tool Handlers ──
@@ -211,7 +233,7 @@ function handleGetContext() {
   }, mcpSession);
 }
 
-function handleMemorySearch(params) {
+async function handleMemorySearch(params) {
   if (!projectRoot) return shared.formatMCPResponse("memory_search", "error", "No project root", null, mcpSession);
 
   const query = params.query || "";
@@ -219,12 +241,18 @@ function handleMemorySearch(params) {
   const research = shared.readJsonl(path.join(projectRoot, ".ai-memory", "research.jsonl"));
   const decisions = shared.readJsonl(path.join(projectRoot, ".ai-memory", "decisions.jsonl"));
 
-  // BM25 search over research
-  const researchIndex = shared.buildBM25Index(research);
-  const researchHits = shared.bm25Score(query, researchIndex).slice(0, limit);
+  // Hybrid search: BM25 + embeddings + RRF fusion (Karpathy arxiv-sanity-lite inspired)
+  const searchFusion = require(path.join(import.meta.dirname, "search-fusion.js"));
+  let storedEmbeddings = {};
+  try {
+    const embMod = require(path.join(import.meta.dirname, "embeddings.js"));
+    storedEmbeddings = embMod.readEmbeddings(projectRoot);
+  } catch {}
+
+  const researchHits = await searchFusion.hybridSearch(query, research, storedEmbeddings, shared, { limit });
   const researchMap = Object.fromEntries(research.map(r => [r.id, r]));
 
-  // BM25 search over decisions
+  // BM25 search over decisions (smaller corpus, BM25 sufficient)
   const decisionSearchable = decisions.map(d => ({
     id: d.id, topic: d.category || "", tags: [],
     finding: [d.decision || "", d.rationale || "", d.category || ""].join(" "),
@@ -604,6 +632,35 @@ function handleListSkills() {
     data, mcpSession);
 }
 
+// ── Maintenance + Snapshot Handlers ──
+
+async function handleRunMaintenance(params) {
+  if (!projectRoot) return shared.formatMCPResponse("run_maintenance", "error", "No project root", null, mcpSession);
+  try {
+    const maintain = require(path.join(import.meta.dirname, "auto-maintain.js"));
+    const result = await maintain.runMaintenance(projectRoot, { dryRun: !!params.dry_run });
+    return shared.formatMCPResponse("run_maintenance", "ok",
+      `Maintenance ${params.dry_run ? "(dry-run) " : ""}complete: ${result.stale?.staleCount || 0} stale, ${result.duplicates?.duplicatePairs?.length || 0} duplicate pairs, ${result.graph?.orphanedRemoved || 0} orphaned triples pruned, ${result.embeddings?.refreshed || 0} embeddings refreshed`,
+      result, mcpSession);
+  } catch (err) {
+    return shared.formatMCPResponse("run_maintenance", "error", err.message, null, mcpSession);
+  }
+}
+
+function handleGetCorpusSnapshot(params) {
+  if (!projectRoot) return shared.formatMCPResponse("get_corpus_snapshot", "error", "No project root", null, mcpSession);
+  try {
+    const snap = require(path.join(import.meta.dirname, "corpus-snapshot.js"));
+    const maxChars = Math.min(Math.max(params.max_chars || 50000, 1000), 100000);
+    const markdown = snap.generateSnapshot(projectRoot, { maxChars });
+    return shared.formatMCPResponse("get_corpus_snapshot", "ok",
+      `Snapshot generated (${markdown.length} chars)`,
+      { snapshot: markdown }, mcpSession);
+  } catch (err) {
+    return shared.formatMCPResponse("get_corpus_snapshot", "error", err.message, null, mcpSession);
+  }
+}
+
 // ── Tool Dispatch ──
 
 function handleToolCall(name, args) {
@@ -621,6 +678,8 @@ function handleToolCall(name, args) {
     case "code_impact": return handleCodeImpact(args);
     case "code_structure": return handleCodeStructure(args);
     case "list_skills": return handleListSkills();
+    case "run_maintenance": return handleRunMaintenance(args);
+    case "get_corpus_snapshot": return handleGetCorpusSnapshot(args);
     default:
       return { status: "error", summary: `Unknown tool: ${name}` };
   }
@@ -707,7 +766,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         isError: true,
       };
     }
-    const result = handleToolCall(name, safeArgs);
+    const result = await handleToolCall(name, safeArgs);
     return {
       content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
     };
