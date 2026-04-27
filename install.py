@@ -168,6 +168,11 @@ def claude_home():
     return Path.home() / ".claude"
 
 
+def copilot_home():
+    """Return ~/.copilot/ as a Path."""
+    return Path.home() / ".copilot"
+
+
 def settings_path():
     return claude_home() / "settings.json"
 
@@ -699,6 +704,39 @@ def setup_ai_router(install_path):
     return True
 
 
+# ─── Copilot CLI MCP Registration (optional) ───────────────────────────────
+
+
+def register_copilot_cli_mcp(install_path):
+    """Register project-memory MCP server with GitHub Copilot CLI."""
+    copilot_dir = copilot_home()
+    if not copilot_dir.is_dir():
+        print_warn("GitHub Copilot CLI not found (~/.copilot/ missing), skipping")
+        return True
+
+    print_step("9b", 10, "Registering MCP server with GitHub Copilot CLI")
+
+    mcp_config_path = copilot_dir / "mcp.json"
+    data = read_json(mcp_config_path)
+    if data is None:
+        data = {}
+
+    fwd_path = to_forward_slashes(install_path)
+    mcp_script = f"{fwd_path}/scripts/mcp-server.mjs"
+
+    if "mcpServers" not in data:
+        data["mcpServers"] = {}
+
+    data["mcpServers"][MCP_SERVER_KEY] = {
+        "command": "node",
+        "args": [mcp_script],
+    }
+
+    write_json(mcp_config_path, data)
+    print_ok(f"MCP server registered in {mcp_config_path}")
+    return True
+
+
 # ─── Install Entrypoint ─────────────────────────────────────────────────────
 
 
@@ -743,6 +781,9 @@ def install():
     # Step 9
     setup_ai_router(install_path)  # Non-fatal
 
+    # Step 9b
+    register_copilot_cli_mcp(install_path)  # Non-fatal
+
     # Summary
     print("\n" + "=" * 60)
     print("  Installation complete!")
@@ -751,12 +792,15 @@ def install():
     print(f"  Plugin ID:     {PLUGIN_ID}")
     print(f"  Hooks:         {len(HOOKS)} registered in settings.json")
     print(f"  MCP server:    {MCP_SERVER_KEY} in settings.json")
+    copilot_mcp = copilot_home() / "mcp.json"
+    if copilot_mcp.is_file():
+        print(f"  Copilot CLI:   MCP registered in {copilot_mcp}")
     router_config = Path.home() / ".ai-router" / "config.json"
     if router_config.is_file():
         print(f"  AI Router:     enabled (config at {router_config})")
     else:
         print(f"  AI Router:     not configured (run installer again or see ROUTER.md)")
-    print(f"\n  -> Restart Claude Code to activate project-memory")
+    print(f"\n  -> Restart Claude Code / Copilot CLI to activate project-memory")
     print()
     return True
 

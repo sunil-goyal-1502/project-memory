@@ -22,6 +22,12 @@ node_modules/
 .ai-memory/.hook-debug.log
 .ai-memory/.daemon-port
 .ai-memory/.daemon-pid
+.ai-memory/.last-maintenance
+.ai-memory/.corpus-snapshot.md
+.ai-memory/.tsne-cache.json
+.ai-memory/.svm-model.json
+.ai-memory/bpe-vocab.json
+.ai-memory/maintenance-log.jsonl
 .ai-memory/embeddings.json
 .ai-memory/code-graph.db
 .ai-memory/code-graph.db-shm
@@ -103,6 +109,7 @@ docs/copilot-competitive-*
 # These contain the maintainer's local install path + per-user decisions/research,
 # so we don't ship the snapshot. They're rebuilt automatically per-user.
 CLAUDE.md
+AGENTS.md
 .github/copilot-instructions.md
 .cursor/rules/project-decisions.mdc
 .cursor/rules/
